@@ -1,6 +1,6 @@
 # trialdesign
 
-[![CI](https://github.com/rushadnihal/trialdesign/actions/workflows/ci.yml/badge.svg)](https://github.com/rushadnihal/trialdesign/actions/workflows/ci.yml)
+[![CI](https://github.com/rushadnihal/trialdesign-v0.1.0/actions/workflows/ci.yml/badge.svg)](https://github.com/rushadnihal/trialdesign-v0.1.0/actions/workflows/ci.yml)
 
 Design a two-arm clinical trial before the data exist. `trialdesign` is a Python command-line
 package for:
@@ -15,7 +15,7 @@ Every number is checked against R (`rpact`, `gsDesign`, `stats`). See [Validated
 ## Install
 
 ```bash
-pip install git+https://github.com/rushadnihal/trialdesign
+pip install git+https://github.com/rushadnihal/trialdesign-v0.1.0
 ```
 
 Python 3.11 or later; depends on numpy, scipy, typer and matplotlib.
