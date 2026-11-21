@@ -1,7 +1,7 @@
 """M1: fixed-design sample size and power, validated against R (tests/reference_values.json).
 
-Reference values come from ``tests/r/fixed_reference_values.R`` (base R ``power.t.test``,
-``power.prop.test`` and the Schoenfeld formula evaluated in R).
+Reference values come from ``tests/r/fixed_reference_values.R`` (base R ``power.t.test`` and
+``power.prop.test``, ``gsDesign::nBinomial`` and ``gsDesign::nEvents``, cross-checked with rpact).
 """
 
 import json
@@ -14,10 +14,6 @@ from scipy import stats
 from trialdesign import fixed
 
 REF = json.loads((Path(__file__).parent / "reference_values.json").read_text())["fixed"]
-
-
-def _cases(source: str, key: str) -> list[dict]:
-    return [c for c in REF if c["source"] == source and key in c and "power" in c]
 
 
 def _ref(case_id: str) -> dict:
@@ -59,8 +55,27 @@ def test_binary_power_matches_power_prop_test() -> None:
     assert p == pytest.approx(c["power"], abs=1e-8)
 
 
+def _ids() -> set[str]:
+    return {c["id"] for c in REF}
+
+
+@pytest.mark.skipif(
+    "binary_n_30_45_2to1" not in _ids(), reason="regenerate reference_values.json with gsDesign"
+)
+def test_binary_unequal_allocation_matches_gsdesign() -> None:
+    c = _ref("binary_n_30_45_2to1")
+    res = fixed.sample_size_binary(
+        c["p_control"],
+        c["p_treatment"],
+        alpha_two_sided=c["alpha_two_sided"],
+        power=c["power"],
+        allocation=c["allocation"],
+    )
+    assert res.n_control == pytest.approx(c["n_control"], abs=1e-4)
+
+
 @pytest.mark.parametrize("case", ["survival_events_hr0.7", "survival_events_hr0.75_2to1"])
-def test_survival_matches_schoenfeld_in_r(case: str) -> None:
+def test_survival_matches_r(case: str) -> None:
     c = _ref(case)
     res = fixed.events_survival(
         c["hazard_ratio"],
