@@ -40,8 +40,8 @@ def test_design_normal_t_method() -> None:
 
 def test_design_missing_parameter_fails_early() -> None:
     result = runner.invoke(app, ["design", "--endpoint", "binary", "--pc", "0.3"])
-    assert result.exit_code != 0
-    assert "--pt is required" in result.output
+    assert result.exit_code == 2
+    assert "Error: --pt is required for the binary endpoint" in result.output
 
 
 def test_design_invalid_value_fails_with_plain_message() -> None:

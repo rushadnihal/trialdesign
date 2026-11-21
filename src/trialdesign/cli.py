@@ -45,7 +45,7 @@ class Endpoint(StrEnum):
 
 def _require(value: float | None, flag: str, endpoint: Endpoint) -> float:
     if value is None:
-        raise typer.BadParameter(f"{flag} is required for the {endpoint.value} endpoint")
+        raise ValueError(f"{flag} is required for the {endpoint.value} endpoint")
     return value
 
 
