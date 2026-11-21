@@ -44,6 +44,7 @@ __all__ = [
     "crossing_probabilities",
     "efficacy_bounds",
     "efficacy_bounds_mvn",
+    "expected_info_fraction",
     "group_sequential_design",
 ]
 
@@ -321,6 +322,37 @@ def crossing_probabilities(
     return up, low
 
 
+def expected_info_fraction(
+    info_rates: int | Sequence[float],
+    efficacy: Sequence[float],
+    futility: Sequence[float] | None = None,
+    drift: float = 0.0,
+) -> float:
+    r"""Expected information fraction at which the trial stops.
+
+    .. math:: E(t_{\text{stop}}) = \sum_{k<K} t_k\, P(\text{stop at } k)
+              + \Bigl(1 - \sum_{k<K} P(\text{stop at } k)\Bigr),
+
+    with the stopping probabilities from :func:`crossing_probabilities`. Times the maximum
+    sample size (or events) this is the expected sample size; times the inflation factor it
+    is the expected sample size relative to the fixed design (``gsDesign``'s ``en`` with
+    ``n.fix = 1``).
+
+    Parameters
+    ----------
+    info_rates, efficacy, futility, drift
+        As for :func:`crossing_probabilities`.
+
+    References
+    ----------
+    Jennison & Turnbull (2000), sections 7.2 and 19.2.
+    """
+    t = check_info_rates(info_rates)
+    up, low = crossing_probabilities(t, efficacy, futility, drift)
+    p_stop = (up + low)[:-1]
+    return float(t[:-1] @ p_stop + (1.0 - p_stop.sum()))
+
+
 def _futility_bounds(
     t: NDArray, efficacy: NDArray, beta_spend: NDArray, drift: float
 ) -> NDArray[np.float64]:
@@ -401,6 +433,17 @@ class GroupSequentialDesign:
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Per-look stopping probabilities at ``drift`` (default: the design alternative)."""
         return crossing_probabilities(
+            self.info_rates,
+            self.efficacy,
+            self.futility if use_futility else None,
+            self.drift if drift is None else drift,
+        )
+
+    def expected_info_fraction(
+        self, drift: float | None = None, use_futility: bool = True
+    ) -> float:
+        """Expected stopping information fraction at ``drift`` (default: the alternative)."""
+        return expected_info_fraction(
             self.info_rates,
             self.efficacy,
             self.futility if use_futility else None,
