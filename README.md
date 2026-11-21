@@ -5,7 +5,34 @@ Lan-DeMets stopping boundaries with non-binding futility, a beta-binomial go/no-
 and Monte Carlo operating characteristics. Every number is validated against R (`rpact`, `gsDesign`).
 
 Status: work in progress. Done: M0 skeleton, M1 fixed designs, M2 spending functions and
-group-sequential boundaries, M3 simulated operating characteristics, M4 Bayesian interim.
+group-sequential boundaries, M3 simulated operating characteristics, M4 Bayesian interim,
+M5 command line, design files and report.
+
+## Command line
+
+Four commands. Each takes flags, a TOML design file (`--config`), or both; flags override the
+file. Output is a plain table, or JSON with `--json`. Only `report --out` writes to disk, and
+every simulation prints its seed.
+
+```bash
+# Fixed design (two-sided alpha 0.05), then group-sequential (one-sided alpha 0.025)
+trialdesign design --endpoint survival --hr 0.7
+trialdesign design --endpoint survival --hr 0.7 --looks 3 --spending obf --futility pocock
+
+# Monte Carlo operating characteristics under H0 and H1, next to the exact values
+trialdesign simulate --config examples/phase3_survival.toml --nsim 200000 --seed 2026
+
+# Bayesian go/no-go interim: exact OCs, and posterior, PPoS and decision for observed data
+trialdesign bayes --pc 0.30 --pt 0.45 --n 60 --interim 30 --go 0.9 --nogo 0.1 --xc 6 --xt 12
+
+# Markdown report plus PNG plots of the boundaries and operating characteristics
+trialdesign report --config examples/phase3_survival.toml --out results/
+trialdesign report --config examples/phase2_binary_bayes.toml --out results/bayes/
+```
+
+A design file has `[design]`, `[sequential]`, `[simulation]` and `[bayes]` tables; every key
+is the name of a flag (see `examples/`). Alpha must name its sidedness (`alpha_one_sided` or
+`alpha_two_sided`), and futility is always non-binding.
 
 ## Install (development)
 
