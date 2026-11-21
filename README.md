@@ -22,8 +22,11 @@ ruff check . && ruff format --check .
 from trialdesign import boundaries, fixed
 
 d = boundaries.group_sequential_design(
-    [1/3, 2/3, 1.0], alpha_one_sided=0.025, power=0.80,
-    efficacy_spending="obf", futility_spending="obf",  # futility is non-binding
+    [1 / 3, 2 / 3, 1.0],
+    alpha_one_sided=0.025,
+    power=0.80,
+    efficacy_spending="obf",
+    futility_spending="obf",  # futility is non-binding
 )
 d.efficacy, d.futility, d.inflation_factor
 d.max_sample_size(fixed.events_survival(0.70).events)  # max events = fixed events x IF
