@@ -1,0 +1,13 @@
+{
+  "_generated_with": "R version 4.3.3 (2024-02-29)",
+  "fixed": [
+    {"id": "normal_n_d0.5", "source": "stats::power.t.test", "delta": 0.5, "sd": 1, "alpha_two_sided": 0.05, "power": 0.8, "n_per_arm": 63.7657637143},
+    {"id": "normal_n_d3_sd10_a01_p90", "source": "stats::power.t.test", "delta": 3, "sd": 10, "alpha_two_sided": 0.01, "power": 0.9, "n_per_arm": 332.316004015},
+    {"id": "normal_power_n40", "source": "stats::power.t.test", "delta": 0.5, "sd": 1, "alpha_two_sided": 0.05, "n_per_arm": 40, "power": 0.598131600924},
+    {"id": "binary_n_30_45", "source": "stats::power.prop.test", "p_control": 0.3, "p_treatment": 0.45, "alpha_two_sided": 0.05, "power": 0.8, "n_per_arm": 162.334383007},
+    {"id": "binary_n_10_20_p90", "source": "stats::power.prop.test", "p_control": 0.1, "p_treatment": 0.2, "alpha_two_sided": 0.05, "power": 0.9, "n_per_arm": 265.855996829},
+    {"id": "binary_power_n100", "source": "stats::power.prop.test", "p_control": 0.3, "p_treatment": 0.45, "alpha_two_sided": 0.05, "n_per_arm": 100, "power": 0.592409790139},
+    {"id": "survival_events_hr0.7", "source": "Schoenfeld (1983) in R", "hazard_ratio": 0.7, "alpha_two_sided": 0.05, "power": 0.8, "allocation": 1, "events": 246.787104547},
+    {"id": "survival_events_hr0.75_2to1", "source": "Schoenfeld (1983) in R", "hazard_ratio": 0.75, "alpha_two_sided": 0.05, "power": 0.9, "allocation": 2, "events": 571.324877274}
+  ]
+}
