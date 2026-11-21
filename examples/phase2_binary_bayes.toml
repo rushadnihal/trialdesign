@@ -1,0 +1,20 @@
+# Phase 2 binary-endpoint trial with one Bayesian go/no-go interim at half the patients.
+# Run:  trialdesign bayes --config examples/phase2_binary_bayes.toml
+#       trialdesign report --config examples/phase2_binary_bayes.toml --out results/
+
+[bayes]
+pc = 0.30                   # control response rate (H0 and H1)
+pt = 0.45                   # treatment response rate under H1
+n = 60                      # control patients at the final analysis
+interim = 30                # control patients at the interim
+allocation = 1.0            # n_T / n_C
+prior_c = [1, 1]            # Beta analysis priors
+prior_t = [1, 1]
+success = 0.95              # final success: P(p_T > p_C | data) >= 0.95
+go = 0.9                    # go if PPoS >= 0.9
+nogo = 0.1                  # no-go if PPoS <= 0.1
+design_prior_t = [4.5, 5.5] # assurance: Beta design prior on p_T (mean 0.45)
+
+[simulation]
+nsim = 200000
+seed = 2026

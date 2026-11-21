@@ -1,0 +1,22 @@
+# Phase 3 time-to-event trial with two interim looks.
+# Run:  trialdesign design --config examples/phase3_survival.toml
+#       trialdesign simulate --config examples/phase3_survival.toml
+#       trialdesign report --config examples/phase3_survival.toml --out results/
+
+[design]
+endpoint = "survival"
+hr = 0.70                 # hazard ratio, treatment vs control
+prob_event = 0.75         # share of patients with an event by the final analysis
+allocation = 1.0          # n_T / n_C
+alpha_one_sided = 0.025
+power = 0.80
+
+[sequential]
+looks = [0.33, 0.67, 1.0] # information fractions (share of the maximum events)
+efficacy = "obf"          # Lan-DeMets O'Brien-Fleming-type alpha spending
+futility = "pocock"       # Lan-DeMets Pocock-type beta spending
+binding_futility = false  # futility is always non-binding
+
+[simulation]
+nsim = 200000
+seed = 2026
