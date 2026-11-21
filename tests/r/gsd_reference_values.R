@@ -27,11 +27,21 @@ en_gsd <- function(g) {
   if (is.list(en)) en <- en$en
   as.numeric(en)
 }
-# rpact's average sample numbers under H0 and H1, relative to the fixed design.
+# rp() returns a bare NA when an rpact call fails. rpact objects are R6 classes from rpact 4.0
+# on (S4 reference classes before), so test for that NA rather than for a list or S4 object.
+rp_failed <- function(x) is.null(x) || (is.atomic(x) && length(x) == 1 && is.na(x))
+# A numeric field of an rpact object, or NA if it is missing or empty.
+rp_num <- function(x, n = 1) {
+  v <- rp(as.numeric(x))
+  if (length(v) < n) rep(NA_real_, n) else v[seq_len(n)]
+}
+# rpact's average sample numbers under H0 and H1, relative to the fixed design
+# (getDesignCharacteristics divides them by nFixed).
 asn_rpact <- function(d) {
+  if (rp_failed(d)) return(c(NA_real_, NA_real_))
   ch <- rp(getDesignCharacteristics(d))
-  if (!(is.list(ch) || isS4(ch))) return(c(NA_real_, NA_real_))
-  c(rp(as.numeric(ch$averageSampleNumber0)), rp(as.numeric(ch$averageSampleNumber1)))
+  if (rp_failed(ch)) return(c(NA_real_, NA_real_))
+  c(rp_num(ch$averageSampleNumber0), rp_num(ch$averageSampleNumber1))
 }
 
 gsd_rows <- character(0)
@@ -94,12 +104,11 @@ for (e in fut_cases) {
                                    typeOfDesign = as_rpact[[e$s]],
                                    typeBetaSpending = bs_rpact[[e$f]],
                                    bindingFutility = FALSE, informationRates = e$t))
-  r_ok <- is.list(r) || isS4(r)
-  r_fut <- if (r_ok) rp(r$futilityBounds) else NA_real_
+  r_fut <- if (rp_failed(r)) NA_real_ else rp_num(r$futilityBounds, k - 1)
   crosscheck(paste("futility", e$id, "max|diff| (rpact)"), 0,
              maxdiff(g$lower$bound[-k], r_fut), tol = 1e-3, strict = FALSE)
   en <- en_gsd(g)
-  asn <- if (r_ok) asn_rpact(r) else c(NA_real_, NA_real_)
+  asn <- asn_rpact(r)
   crosscheck(paste("expected n H0", e$id, "(rpact)"), en[1], asn[1], tol = 1e-3,
              strict = FALSE)
   crosscheck(paste("expected n H1", e$id, "(rpact)"), en[2], asn[2], tol = 1e-3,
