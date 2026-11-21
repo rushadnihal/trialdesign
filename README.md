@@ -57,13 +57,15 @@ from trialdesign import bayes
 bayes.prob_superiority(6, 30, 12, 30)  # P(p_T > p_C | 6/30 vs 12/30), Beta(1, 1) priors
 
 b = bayes.bayesian_interim_design(
-    n_interim=30, n_final=60,          # control patients; treatment = allocation x control
-    success_threshold=0.95,            # final success: P(p_T > p_C | data) >= 0.95
-    go_threshold=0.9, nogo_threshold=0.1,
+    n_interim=30,
+    n_final=60,  # control patients; treatment = allocation x control
+    success_threshold=0.95,  # final success: P(p_T > p_C | data) >= 0.95
+    go_threshold=0.9,
+    nogo_threshold=0.1,
 )
-b.ppos(6, 12), b.decide(6, 12)         # predictive probability of success, go/no-go/continue
+b.ppos(6, 12), b.decide(6, 12)  # predictive probability of success, go/no-go/continue
 oc = b.operating_characteristics(0.30, 0.30)
-oc.prob_success                        # exact type I error of the whole procedure
+oc.prob_success  # exact type I error of the whole procedure
 b.assurance(0.30, (4.5, 5.5)).prob_success  # Beta(4.5, 5.5) design prior on p_T
 bayes.simulate_bayesian(b, 0.30, 0.45, n_sim=200_000, seed=2026).reject_prob
 ```
