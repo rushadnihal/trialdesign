@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trialdesign"
+version = "0.0.1"
+description = "Group-sequential and Bayesian design for two-arm clinical trials"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Rushad Nihal" }]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "typer>=0.12",
+    "matplotlib>=3.8",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+trialdesign = "trialdesign.cli:app"
+
+[project.urls]
+Repository = "https://github.com/rushadnihal/trialdesign"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trialdesign"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "NPY", "RUF"]
