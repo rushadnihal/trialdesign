@@ -152,7 +152,7 @@ def test_ppos_matches_monte_carlo(design) -> None:
 
 def test_ppos_with_no_patients_left_is_zero_or_one() -> None:
     for x_c, x_t in [(6, 12), (10, 10), (3, 14), (8, 13)]:
-        ppos = bayes.predictive_probability(x_c, 30, x_t, 30, 30, 30)
+        ppos = bayes.predictive_probability(x_c, 30, x_t, 30, 30, 30, success_threshold=0.95)
         win = bayes.prob_superiority(x_c, 30, x_t, 30) >= 0.95
         assert ppos == float(win)
 
@@ -276,3 +276,40 @@ def test_input_validation() -> None:
         bayes.bayesian_interim_design(20, 20)
     with pytest.raises(ValueError, match="response rate"):
         bayes.bayesian_interim_design(10, 20).assurance(1.5, (1, 1))
+
+
+# ------------------------------------------------------------------- calibration
+
+
+def test_default_threshold_controls_worst_case_type_i_error() -> None:
+    d = bayes.bayesian_interim_design(30, 60)
+    assert d.success_threshold == bayes.DEFAULT_SUCCESS_THRESHOLD == 0.98
+    worst, _ = bayes.max_type_i_error(d)
+    assert worst <= 0.025
+    assert d.operating_characteristics(0.3, 0.3).prob_success <= 0.025
+
+
+def test_calibrated_threshold_is_the_smallest_that_controls_alpha() -> None:
+    eta = bayes.calibrate_success_threshold(30, 60, alpha_one_sided=0.025)
+    assert eta == pytest.approx(0.9789, abs=1e-4)
+    assert eta <= bayes.DEFAULT_SUCCESS_THRESHOLD
+    at = bayes.max_type_i_error(bayes.bayesian_interim_design(30, 60, success_threshold=eta))[0]
+    below = bayes.bayesian_interim_design(30, 60, success_threshold=eta - 2e-4)
+    assert at <= 0.025 < bayes.max_type_i_error(below)[0]
+
+
+def test_calibration_at_one_rate_is_no_stricter_than_worst_case() -> None:
+    worst = bayes.calibrate_success_threshold(20, 40)
+    at_030 = bayes.calibrate_success_threshold(20, 40, p_control=0.3)
+    assert at_030 <= worst
+    d = bayes.bayesian_interim_design(20, 40, success_threshold=at_030)
+    assert d.operating_characteristics(0.3, 0.3).prob_success <= 0.025
+
+
+def test_calibration_matches_simulation() -> None:
+    eta = bayes.calibrate_success_threshold(30, 60)
+    d = bayes.bayesian_interim_design(30, 60, success_threshold=eta)
+    exact = d.operating_characteristics(0.35, 0.35).prob_success
+    assert exact <= 0.025
+    oc = bayes.simulate_bayesian(d, 0.35, 0.35, n_sim=200_000, seed=5)
+    assert abs(oc.reject_prob - exact) < 4 * oc.reject_prob_se

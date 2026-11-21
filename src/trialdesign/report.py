@@ -61,6 +61,7 @@ __all__ = [
     "plot_gsd_oc",
     "sequential_summary",
     "simulation_summary",
+    "success_text",
     "write_report",
 ]
 
@@ -303,10 +304,7 @@ def _decision_rule(design: bayes.BayesianInterimDesign) -> list[Summary]:
 
 
 def _max_type_i_error(design: bayes.BayesianInterimDesign, pc: float) -> tuple[float, float]:
-    grid = np.unique(np.append(np.round(np.linspace(0.05, 0.95, 19), 2), pc))
-    errs = [design.operating_characteristics(p, p).prob_success for p in grid]
-    i = int(np.argmax(errs))
-    return float(errs[i]), float(grid[i])
+    return bayes.max_type_i_error(design, np.unique(np.append(bayes.NULL_RATES, pc)))
 
 
 def bayes_summary(
@@ -863,6 +861,15 @@ def gsd_markdown(
 CONVENTIONAL_ALPHA_ONE_SIDED = 0.025
 
 
+def success_text(s: Summary) -> str:
+    """The final success rule, noting a calibrated threshold."""
+    text = f"P(p_T > p_C | data) >= {s['success_threshold']:.4g}"
+    alpha = s.get("success_calibrated_to")
+    if alpha is not None:
+        text += f" (calibrated: worst-case type I error <= {alpha:g} one-sided)"
+    return text
+
+
 def alpha_note(s: Summary) -> str:
     """A warning when the Bayesian design's type I error exceeds one-sided 0.025."""
     return (
@@ -889,7 +896,7 @@ def bayes_markdown(
             "Analysis priors",
             f"Beta({pr_c[0]:g}, {pr_c[1]:g}) control, Beta({pr_t[0]:g}, {pr_t[1]:g}) treatment",
         ],
-        ["Final success", f"P(p_T > p_C | data) >= {s['success_threshold']:g}"],
+        ["Final success", success_text(s)],
         ["Interim go", f"PPoS >= {s['go_threshold']:g} (stop, declare success)"],
         ["Interim no-go", f"PPoS <= {s['nogo_threshold']:g} (stop for futility)"],
     ]

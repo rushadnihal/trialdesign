@@ -10,7 +10,9 @@ interim = 30                # control patients at the interim
 allocation = 1.0            # n_T / n_C
 prior_c = [1, 1]            # Beta analysis priors
 prior_t = [1, 1]
-success = 0.95              # final success: P(p_T > p_C | data) >= 0.95
+success = 0.98              # final success: P(p_T > p_C | data) >= 0.98 (the default)
+                            # 0.98 holds the worst-case type I error at 0.023 one-sided;
+                            # use calibrate = true to re-calibrate after changing n or go
 go = 0.9                    # go if PPoS >= 0.9
 nogo = 0.1                  # no-go if PPoS <= 0.1
 design_prior_t = [4.5, 5.5] # assurance: Beta design prior on p_T (mean 0.45)

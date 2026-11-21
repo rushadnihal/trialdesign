@@ -305,7 +305,7 @@ def test_report_bayes(tmp_path: Path) -> None:
     assert [Path(f).name for f in files] == ["report.md", "bayes_oc.png", "decision_map.png"]
     md = (out / "report.md").read_text()
     assert "### Interim decision rule" in md and "decision **" in md
-    assert "above the conventional one-sided 0.025" in md
+    assert "above the conventional" not in md  # the calibrated default controls alpha
 
 
 def test_report_from_flags(tmp_path: Path) -> None:
@@ -332,3 +332,23 @@ def test_report_needs_something() -> None:
     result = runner.invoke(app, ["report"])
     assert result.exit_code == 2
     assert "nothing to report" in result.output
+
+
+def test_bayes_default_is_calibrated_and_old_default_is_flagged() -> None:
+    base = ["bayes", "--pc", "0.3", "--pt", "0.45", "--n", "60", "--interim", "30"]
+    assert _json(base)["bayes"]["max_type_i_error"] <= 0.025
+    result = runner.invoke(app, [*base, "--success", "0.95"])
+    assert "above the conventional one-sided 0.025" in result.output
+
+
+def test_bayes_calibrate_flag() -> None:
+    base = ["bayes", "--pc", "0.3", "--pt", "0.45", "--n", "40", "--interim", "20"]
+    out = _json([*base, "--calibrate"])["bayes"]
+    assert out["success_threshold"] == pytest.approx(bayes.calibrate_success_threshold(20, 40))
+    assert out["success_calibrated_to"] == 0.025
+    assert out["max_type_i_error"] <= 0.025
+    strict = _json([*base, "--calibrate", "--alpha-one-sided", "0.01"])["bayes"]
+    assert strict["max_type_i_error"] <= 0.01 < out["max_type_i_error"]
+    result = runner.invoke(app, [*base, "--calibrate", "--success", "0.9"])
+    assert result.exit_code == 2
+    assert "give success or calibrate, not both" in result.output

@@ -113,7 +113,15 @@ PriorTOpt = Annotated[
 ]
 SuccessOpt = Annotated[
     float | None,
-    typer.Option(help="Bayes: final success if P(p_T > p_C | data) >= this [default: 0.95]."),
+    typer.Option(help="Bayes: final success if P(p_T > p_C | data) >= this [default: 0.98]."),
+]
+CalibrateOpt = Annotated[
+    bool | None,
+    typer.Option(
+        "--calibrate/--no-calibrate",
+        help="Bayes: choose the success threshold that holds the worst-case type I error at "
+        "--alpha-one-sided (default 0.025).",
+    ),
 ]
 GoOpt = Annotated[float | None, typer.Option(help="Bayes: go if PPoS >= this [default: 0.9].")]
 NogoOpt = Annotated[float | None, typer.Option(help="Bayes: no-go if PPoS <= this [default: 0.1].")]
@@ -308,16 +316,26 @@ def _resolve_bayes(cfg: config.Config, flags: dict[str, Any]):
     for key in ("pc", "pt", "n", "interim"):
         if b.get(key) is None:
             raise ValueError(f"--{key} is required for a Bayesian interim design")
-    design = bayes.bayesian_interim_design(
-        n_interim=_whole(b["interim"], "interim"),
-        n_final=_whole(b["n"], "n"),
-        allocation=_number(b.get("allocation", 1.0), "allocation"),
-        prior_control=_pair(b.get("prior_c", (1, 1)), "prior_c"),
-        prior_treatment=_pair(b.get("prior_t", (1, 1)), "prior_t"),
-        success_threshold=_number(b.get("success", 0.95), "success"),
-        go_threshold=_number(b.get("go", 0.9), "go"),
-        nogo_threshold=_number(b.get("nogo", 0.1), "nogo"),
-    )
+    common = {
+        "n_interim": _whole(b["interim"], "interim"),
+        "n_final": _whole(b["n"], "n"),
+        "allocation": _number(b.get("allocation", 1.0), "allocation"),
+        "prior_control": _pair(b.get("prior_c", (1, 1)), "prior_c"),
+        "prior_treatment": _pair(b.get("prior_t", (1, 1)), "prior_t"),
+        "go_threshold": _number(b.get("go", 0.9), "go"),
+        "nogo_threshold": _number(b.get("nogo", 0.1), "nogo"),
+    }
+    calibrate = b.get("calibrate", False)
+    if not isinstance(calibrate, bool):
+        raise ValueError("calibrate must be true or false")
+    if calibrate:
+        if b.get("success") is not None:
+            raise ValueError("give success or calibrate, not both")
+        alpha = _number(b.get("alpha_one_sided", 0.025), "alpha_one_sided")
+        success = bayes.calibrate_success_threshold(alpha_one_sided=alpha, **common)
+    else:
+        success = _number(b.get("success", bayes.DEFAULT_SUCCESS_THRESHOLD), "success")
+    design = bayes.bayesian_interim_design(success_threshold=success, **common)
     extra = {
         "pc": _number(b["pc"], "pc"),
         "pt": _number(b["pt"], "pt"),
@@ -325,6 +343,9 @@ def _resolve_bayes(cfg: config.Config, flags: dict[str, Any]):
         "design_prior_t": _design_prior(b.get("design_prior_t"), "design_prior_t"),
         "xc": None if b.get("xc") is None else _whole(b["xc"], "xc"),
         "xt": None if b.get("xt") is None else _whole(b["xt"], "xt"),
+        "calibrated_to": (
+            _number(b.get("alpha_one_sided", 0.025), "alpha_one_sided") if calibrate else None
+        ),
     }
     return design, extra
 
@@ -334,6 +355,7 @@ def _bayes_run(design: bayes.BayesianInterimDesign, extra: dict[str, Any], nsim,
     s = report.bayes_summary(
         design, extra["pc"], extra["pt"], xc=extra["xc"], xt=extra["xt"], **priors
     )
+    s["success_calibrated_to"] = extra["calibrated_to"]
     sim = None
     if nsim is not None:
         sim = report.bayes_simulation_summary(
@@ -419,7 +441,7 @@ def _print_bayes(s: dict[str, Any], sim: dict[str, Any] | None) -> None:
             "patients at final (C, T)": f"{s['n_final_control']}, {s['n_final_treatment']}",
             "analysis priors (C; T)": f"Beta({pr_c[0]:g}, {pr_c[1]:g}); "
             f"Beta({pr_t[0]:g}, {pr_t[1]:g})",
-            "final success": f"P(p_T > p_C | data) >= {s['success_threshold']:g}",
+            "final success": report.success_text(s),
             "interim go / no-go": f"PPoS >= {s['go_threshold']:g} / <= {s['nogo_threshold']:g}",
             "max type I error": f"{s['max_type_i_error']:.4f} "
             f"(over common rates 0.05-0.95, worst at {s['max_type_i_error_at']:g})",
@@ -553,6 +575,8 @@ def bayes_cmd(
     prior_c: PriorCOpt = None,
     prior_t: PriorTOpt = None,
     success: SuccessOpt = None,
+    calibrate: CalibrateOpt = None,
+    alpha_one_sided: AlphaOneOpt = None,
     go: GoOpt = None,
     nogo: NogoOpt = None,
     design_prior_c: DesignPriorCOpt = None,
@@ -611,6 +635,7 @@ def report_cmd(
     prior_c: PriorCOpt = None,
     prior_t: PriorTOpt = None,
     success: SuccessOpt = None,
+    calibrate: CalibrateOpt = None,
     go: GoOpt = None,
     nogo: NogoOpt = None,
     design_prior_c: DesignPriorCOpt = None,

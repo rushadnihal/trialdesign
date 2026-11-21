@@ -54,6 +54,7 @@ Trials and Health-Care Evaluation*. Wiley. Section 6.6.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -64,13 +65,16 @@ from scipy import special, stats
 from trialdesign.simulate import OperatingCharacteristics, SeedLike, _check_n_sim, _rng, _Tally
 
 __all__ = [
+    "DEFAULT_SUCCESS_THRESHOLD",
     "BayesianInterimDesign",
     "BayesianOC",
     "Decision",
     "DesignPrior",
     "Prior",
     "bayesian_interim_design",
+    "calibrate_success_threshold",
     "decide",
+    "max_type_i_error",
     "posterior",
     "predictive_probability",
     "prob_superiority",
@@ -84,6 +88,16 @@ DesignPrior = float | Prior  # a fixed response rate, or a Beta(a, b) design pri
 Decision = Literal["go", "no-go", "continue"]
 
 _GO, _CONTINUE, _NOGO = 1, 0, -1
+
+#: Default final success threshold :math:`\eta`. :func:`calibrate_success_threshold` gives
+#: 0.9789 for the reference design (30 of 60 control patients at the interim, 1:1, Beta(1, 1)
+#: priors, go 0.9, no-go 0.1), rounded up to 0.98: worst-case type I error 0.0232 over common
+#: response rates 0.05 to 0.95, and 0.0227 at 0.30, both below one-sided 0.025. Re-calibrate
+#: for other sample sizes or thresholds.
+DEFAULT_SUCCESS_THRESHOLD = 0.98
+
+#: Common response rates over which the worst-case type I error is taken.
+NULL_RATES = np.round(np.linspace(0.05, 0.95, 19), 2)
 _CHUNK = 250_000
 
 # Gauss-Legendre nodes on s in [0, 1], mapped to u = (1 - cos(pi s)) / 2.
@@ -275,7 +289,7 @@ def predictive_probability(
     n_final_t: int,
     prior_c: Prior = (1.0, 1.0),
     prior_t: Prior = (1.0, 1.0),
-    success_threshold: float = 0.95,
+    success_threshold: float = DEFAULT_SUCCESS_THRESHOLD,
 ) -> float:
     r"""Predictive probability of success at the final analysis, given interim data.
 
@@ -486,7 +500,7 @@ def bayesian_interim_design(
     allocation: float = 1.0,
     prior_control: Prior = (1.0, 1.0),
     prior_treatment: Prior = (1.0, 1.0),
-    success_threshold: float = 0.95,
+    success_threshold: float = DEFAULT_SUCCESS_THRESHOLD,
     go_threshold: float = 0.9,
     nogo_threshold: float = 0.1,
 ) -> BayesianInterimDesign:
@@ -503,6 +517,8 @@ def bayesian_interim_design(
         Beta analysis priors.
     success_threshold : float
         :math:`\eta` for final success, :math:`P(p_T > p_C \mid \text{data}) \ge \eta`.
+        The default, :data:`DEFAULT_SUCCESS_THRESHOLD`, holds the reference design's type I
+        error at one-sided 0.025; use :func:`calibrate_success_threshold` for other designs.
     go_threshold, nogo_threshold : float
         PPoS thresholds :math:`\gamma_{go} > \gamma_{nogo}`.
 
@@ -546,6 +562,106 @@ def bayesian_interim_design(
         success_table=success,
         ppos_table=ppos,
     )
+
+
+# -------------------------------------------------------------------- calibration
+
+
+def max_type_i_error(
+    design: BayesianInterimDesign, rates: ArrayLike | None = None
+) -> tuple[float, float]:
+    """Largest exact type I error over common response rates :math:`p_T = p_C`.
+
+    Parameters
+    ----------
+    design : BayesianInterimDesign
+        The design.
+    rates : array_like, optional
+        Common response rates to search; default :data:`NULL_RATES` (0.05 to 0.95).
+
+    Returns
+    -------
+    (float, float)
+        The largest type I error and the rate at which it occurs.
+    """
+    grid = NULL_RATES if rates is None else np.atleast_1d(np.asarray(rates, dtype=float))
+    errs = [design.operating_characteristics(p, p).prob_success for p in grid]
+    i = int(np.argmax(errs))
+    return float(errs[i]), float(grid[i])
+
+
+def calibrate_success_threshold(
+    n_interim: int,
+    n_final: int,
+    alpha_one_sided: float = 0.025,
+    p_control: float | None = None,
+    allocation: float = 1.0,
+    prior_control: Prior = (1.0, 1.0),
+    prior_treatment: Prior = (1.0, 1.0),
+    go_threshold: float = 0.9,
+    nogo_threshold: float = 0.1,
+    tol: float = 1e-4,
+) -> float:
+    r"""Smallest final success threshold :math:`\eta` that controls the type I error.
+
+    The probability of declaring success under :math:`p_T = p_C` (go at the interim, or
+    continue and succeed at the final) does not increase with :math:`\eta`: a larger
+    :math:`\eta` shrinks the final success region, which lowers every PPoS and so shrinks the
+    go region too. Bisection therefore finds the smallest :math:`\eta`, to ``tol``, whose exact
+    type I error is at most ``alpha_one_sided``. Because the data are discrete, the attained
+    type I error is usually below the target.
+
+    Parameters
+    ----------
+    n_interim, n_final, allocation, prior_control, prior_treatment, go_threshold, nogo_threshold
+        As for :func:`bayesian_interim_design`.
+    alpha_one_sided : float
+        Target type I error.
+    p_control : float, optional
+        Control response rate at which to control the error. If None (default), the error is
+        controlled at its worst case over :data:`NULL_RATES`, which a regulator would ask for.
+    tol : float
+        Precision of :math:`\eta`; the result is rounded up to a multiple of ``tol``.
+
+    Returns
+    -------
+    float
+
+    References
+    ----------
+    Berry et al. (2010), section 2.5.4 (calibrating Bayesian designs to frequentist error rates).
+    """
+    _check_threshold(alpha_one_sided, "alpha_one_sided")
+    rates = None if p_control is None else [_check_design_prior(float(p_control), "p_control")]
+
+    def error(eta: float) -> float:
+        d = bayesian_interim_design(
+            n_interim,
+            n_final,
+            allocation,
+            prior_control,
+            prior_treatment,
+            eta,
+            go_threshold,
+            nogo_threshold,
+        )
+        return max_type_i_error(d, rates)[0]
+
+    lo, hi = 0.5, 1.0 - 1e-9
+    if error(hi) > alpha_one_sided:
+        raise ValueError(
+            f"no success threshold below 1 holds the type I error at {alpha_one_sided:g}; "
+            "lower go_threshold or increase the sample size"
+        )
+    if error(lo) <= alpha_one_sided:
+        return lo
+    while hi - lo > tol:
+        mid = 0.5 * (lo + hi)
+        if error(mid) <= alpha_one_sided:
+            hi = mid
+        else:
+            lo = mid
+    return float(min(round(math.ceil(hi / tol) * tol, 12), 1.0 - 1e-9))
 
 
 # ------------------------------------------------------------------------ simulation

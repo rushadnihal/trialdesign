@@ -86,7 +86,7 @@ bayes.prob_superiority(6, 30, 12, 30)  # P(p_T > p_C | 6/30 vs 12/30), Beta(1, 1
 b = bayes.bayesian_interim_design(
     n_interim=30,
     n_final=60,  # control patients; treatment = allocation x control
-    success_threshold=0.95,  # final success: P(p_T > p_C | data) >= 0.95
+    success_threshold=0.98,  # final success: P(p_T > p_C | data) >= 0.98 (the default)
     go_threshold=0.9,
     nogo_threshold=0.1,
 )
@@ -96,6 +96,13 @@ oc.prob_success  # exact type I error of the whole procedure
 b.assurance(0.30, (4.5, 5.5)).prob_success  # Beta(4.5, 5.5) design prior on p_T
 bayes.simulate_bayesian(b, 0.30, 0.45, n_sim=200_000, seed=2026).reject_prob
 ```
+
+The default success threshold, 0.98, is calibrated so that this reference design's type I
+error is at most one-sided 0.025 at every common response rate from 0.05 to 0.95 (worst case
+0.0232). The calibration has to be redone when the sample size or the go/no-go thresholds
+change: `bayes.calibrate_success_threshold(30, 60)` returns the smallest threshold that
+controls the worst case (0.9789 here), and `trialdesign bayes --calibrate` does the same from
+the command line.
 
 PPoS is computed exactly by enumerating the beta-binomial posterior predictive of the remaining
 patients, so decisions carry no Monte Carlo error. Every decision is a lookup in two tables
