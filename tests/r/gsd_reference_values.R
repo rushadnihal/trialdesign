@@ -8,14 +8,31 @@
 #   inflation    rpact::getDesignCharacteristics()$inflationFactor
 #   futility     gsDesign::gsDesign(test.type = 4): non-binding beta spending
 #   max events   gsDesign::gsDesign(n.fix = <fixed events>)$n.I
+#   expected n   gsDesign::gsDesign(n.fix = 1)$en under theta = 0 and the design alternative,
+#                i.e. expected sample size relative to the fixed design (M3); for test.type = 4
+#                gsDesign follows the futility bound when computing it
 # Cross-checks: gsDesign for efficacy bounds and inflation factors (strict), rpact for
-# non-binding futility bounds (warns only, in case of a convention difference between the two).
+# non-binding futility bounds and expected sample sizes (warns only, in case of a convention
+# difference between the two).
 
 sf_gsd <- list(obf = sfLDOF, pocock = sfLDPocock)
 as_rpact <- c(obf = "asOF", pocock = "asP")
 bs_rpact <- c(obf = "bsOF", pocock = "bsP")
 arr <- function(x) paste0("[", paste(fmt(x), collapse = ", "), "]")
 maxdiff <- function(a, b) if (anyNA(b)) NA_real_ else max(abs(a - b))
+# Expected sample size relative to the fixed design, at theta = 0 and theta = delta. gsDesign
+# has returned `en` both as a plain vector and as a data frame with an `en` column.
+en_gsd <- function(g) {
+  en <- g$en
+  if (is.list(en)) en <- en$en
+  as.numeric(en)
+}
+# rpact's average sample numbers under H0 and H1, relative to the fixed design.
+asn_rpact <- function(d) {
+  ch <- rp(getDesignCharacteristics(d))
+  if (!(is.list(ch) || isS4(ch))) return(c(NA_real_, NA_real_))
+  c(rp(as.numeric(ch$averageSampleNumber0)), rp(as.numeric(ch$averageSampleNumber1)))
+}
 
 gsd_rows <- character(0)
 add <- function(...) gsd_rows <<- c(gsd_rows, row(...))
@@ -49,9 +66,16 @@ for (e in eff_cases) {
   crosscheck(paste("efficacy", e$id, "max|diff| (gsDesign)"), 0, maxdiff(d$criticalValues,
              g$upper$bound), tol = 1e-4)
   crosscheck(paste("inflation", e$id, "(gsDesign)"), ifac, g$n.I[k], tol = 1e-4)
+  en <- en_gsd(g)
+  asn <- asn_rpact(d)
+  crosscheck(paste("expected n H0", e$id, "(rpact)"), en[1], asn[1], tol = 1e-3,
+             strict = FALSE)
+  crosscheck(paste("expected n H1", e$id, "(rpact)"), en[2], asn[2], tol = 1e-3,
+             strict = FALSE)
   add(id = q(e$id), source = q("rpact::getDesignGroupSequential"), spending = q(e$s),
       alpha_one_sided = 0.025, power = 0.8, info_rates = arr(e$t),
-      efficacy = arr(d$criticalValues), inflation_factor = fmt(ifac))
+      efficacy = arr(d$criticalValues), inflation_factor = fmt(ifac),
+      expected_n_h0 = fmt(en[1]), expected_n_h1 = fmt(en[2]))
 }
 
 # ------------------------------------------------------ non-binding futility (beta spending)
@@ -70,13 +94,21 @@ for (e in fut_cases) {
                                    typeOfDesign = as_rpact[[e$s]],
                                    typeBetaSpending = bs_rpact[[e$f]],
                                    bindingFutility = FALSE, informationRates = e$t))
-  r_fut <- if (is.list(r) || isS4(r)) rp(r$futilityBounds) else NA_real_
+  r_ok <- is.list(r) || isS4(r)
+  r_fut <- if (r_ok) rp(r$futilityBounds) else NA_real_
   crosscheck(paste("futility", e$id, "max|diff| (rpact)"), 0,
              maxdiff(g$lower$bound[-k], r_fut), tol = 1e-3, strict = FALSE)
+  en <- en_gsd(g)
+  asn <- if (r_ok) asn_rpact(r) else c(NA_real_, NA_real_)
+  crosscheck(paste("expected n H0", e$id, "(rpact)"), en[1], asn[1], tol = 1e-3,
+             strict = FALSE)
+  crosscheck(paste("expected n H1", e$id, "(rpact)"), en[2], asn[2], tol = 1e-3,
+             strict = FALSE)
   add(id = q(paste0("futility_", e$id)), source = q("gsDesign::gsDesign(test.type = 4)"),
       efficacy_spending = q(e$s), futility_spending = q(e$f), alpha_one_sided = 0.025,
       power = 1 - beta, info_rates = arr(e$t), efficacy = arr(g$upper$bound),
-      futility = arr(g$lower$bound), inflation_factor = fmt(g$n.I[k]))
+      futility = arr(g$lower$bound), inflation_factor = fmt(g$n.I[k]),
+      expected_n_h0 = fmt(en[1]), expected_n_h1 = fmt(en[2]))
 }
 
 # ------------------------------------------- maximum events = fixed events x inflation
