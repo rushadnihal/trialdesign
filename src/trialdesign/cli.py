@@ -449,7 +449,7 @@ def _print_bayes(s: dict[str, Any], sim: dict[str, Any] | None) -> None:
     )
     tables = report.bayes_tables(s, sim)
     typer.echo(f"\nOperating characteristics (exact)\n{tables[0]}")
-    if s["max_type_i_error"] > report.CONVENTIONAL_ALPHA_ONE_SIDED:
+    if report.needs_alpha_note(s):
         typer.echo(report.alpha_note(s))
     if s["assurance"] is not None:
         typer.echo(f"Assurance = {s['assurance']['prob_success']:.4f}")

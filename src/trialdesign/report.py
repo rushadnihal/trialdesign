@@ -55,6 +55,7 @@ __all__ = [
     "futility_text",
     "gsd_markdown",
     "gsd_tables",
+    "needs_alpha_note",
     "plot_bayes_oc",
     "plot_boundaries",
     "plot_decision_map",
@@ -870,6 +871,14 @@ def success_text(s: Summary) -> str:
     return text
 
 
+def needs_alpha_note(s: Summary) -> bool:
+    """True when the type I error exceeds one-sided 0.025 and was not calibrated on purpose."""
+    return (
+        s["max_type_i_error"] > CONVENTIONAL_ALPHA_ONE_SIDED
+        and s.get("success_calibrated_to") is None
+    )
+
+
 def alpha_note(s: Summary) -> str:
     """A warning when the Bayesian design's type I error exceeds one-sided 0.025."""
     return (
@@ -912,7 +921,7 @@ def bayes_markdown(
         f"{s['max_type_i_error']:.4f} (at {s['max_type_i_error_at']:g}).",
         tables[0],
     ]
-    if s["max_type_i_error"] > CONVENTIONAL_ALPHA_ONE_SIDED:
+    if needs_alpha_note(s):
         parts.append(alpha_note(s))
     if s["assurance"] is not None:
         a = s["assurance"]

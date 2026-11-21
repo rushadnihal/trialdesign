@@ -352,3 +352,24 @@ def test_bayes_calibrate_flag() -> None:
     result = runner.invoke(app, [*base, "--calibrate", "--success", "0.9"])
     assert result.exit_code == 2
     assert "give success or calibrate, not both" in result.output
+
+
+def test_deliberate_calibration_to_a_looser_alpha_is_not_flagged() -> None:
+    args = [
+        "bayes",
+        "--pc",
+        "0.3",
+        "--pt",
+        "0.45",
+        "--n",
+        "60",
+        "--interim",
+        "30",
+        "--calibrate",
+        "--alpha-one-sided",
+        "0.10",
+    ]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert "calibrated: worst-case type I error <= 0.1 one-sided" in result.output
+    assert "above the conventional" not in result.output
