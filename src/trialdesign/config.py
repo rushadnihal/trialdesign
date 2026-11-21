@@ -68,6 +68,8 @@ SECTIONS: dict[str, frozenset[str]] = {
             "prior_c",
             "prior_t",
             "success",
+            "calibrate",
+            "alpha_one_sided",
             "go",
             "nogo",
             "design_prior_c",
