@@ -1,7 +1,5 @@
-# Reference values for M1 (fixed designs).
-#
-# Regenerate from the repository root with:
-#   Rscript tests/r/fixed_reference_values.R > tests/reference_values.json
+# Reference values for M1 (fixed designs). Sourced by tests/r/reference_values.R, which
+# writes tests/reference_values.json; this file only defines `fixed_rows` and the helpers.
 #
 # Primary values (written to the JSON and asserted by tests/test_fixed.py):
 #   normal   stats::power.t.test   (two-sample, strict = FALSE)
@@ -9,11 +7,6 @@
 #   survival gsDesign::nEvents      (Schoenfeld 1983)
 # Cross-checks with rpact are printed to stderr (not saved) and the script stops if they
 # disagree with the primary value by more than the stated tolerance.
-
-suppressPackageStartupMessages({
-  library(gsDesign)
-  library(rpact)
-})
 
 fmt <- function(x) formatC(x, digits = 12, format = "g")
 q <- function(s) sprintf('"%s"', s)
@@ -33,14 +26,17 @@ rp_events <- function(x) {
   if (is.null(v) || all(is.na(v))) v <- x$maxNumberOfEvents
   as.numeric(v[1])
 }
-crosscheck <- function(label, primary, other, tol) {
+crosscheck <- function(label, primary, other, tol, strict = TRUE) {
   if (is.na(other)) {
     message(sprintf("%-34s primary %.6f  rpact NA (skipped)", label, primary))
     return(invisible())
   }
   diff <- abs(primary - other)
   message(sprintf("%-34s primary %.6f  rpact %.6f  |diff| %.2e", label, primary, other, diff))
-  if (diff > tol) stop(sprintf("rpact cross-check failed for %s", label))
+  if (diff > tol) {
+    if (strict) stop(sprintf("rpact cross-check failed for %s", label))
+    warning(sprintf("rpact differs from the primary value for %s", label), call. = FALSE)
+  }
 }
 
 # Two-sided fixed design for rpact (kMax = 1).
@@ -96,7 +92,7 @@ crosscheck("survival HR 0.75 2:1", ev_2,
   tol = 0.01)
 
 # ------------------------------------------------------------------------------ JSON
-rows <- c(
+fixed_rows <- c(
   row(id = q("normal_n_d0.5"), source = q("stats::power.t.test"), delta = 0.5, sd = 1,
       alpha_two_sided = 0.05, power = 0.8, n_per_arm = fmt(n_norm_1)),
   row(id = q("normal_n_d3_sd10_a01_p90"), source = q("stats::power.t.test"), delta = 3, sd = 10,
@@ -119,9 +115,3 @@ rows <- c(
       events = fmt(ev_2))
 )
 
-cat("{\n")
-cat(sprintf('  "_generated_with": "%s; gsDesign %s; rpact %s",\n', R.version.string,
-            packageVersion("gsDesign"), packageVersion("rpact")))
-cat('  "fixed": [\n')
-cat(paste(rows, collapse = ",\n"))
-cat("\n  ]\n}\n")
