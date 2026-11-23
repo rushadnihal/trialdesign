@@ -14,8 +14,11 @@ group-sequential design needs :math:`\delta^2 = \mathrm{IF}\cdot\delta_{\mathrm{
 maximum sample size (or number of events) is the fixed one times the inflation factor IF.
 
 Efficacy boundaries are upper (one-sided) boundaries for :math:`Z_k`. Futility boundaries are
-**non-binding**: efficacy boundaries are computed under H0 as if futility never stops the
-trial, so type I error is at most :math:`\alpha` whether or not futility is followed.
+**non-binding** by default: efficacy boundaries are computed under H0 as if futility never
+stops the trial, so type I error is at most :math:`\alpha` whether or not futility is
+followed. With **binding** futility (opt-in) the efficacy boundaries assume every futility
+stop is made; they are lower, the trial is smaller, and the type I error is :math:`\alpha`
+only if futility is always followed.
 
 References
 ----------
@@ -24,7 +27,8 @@ Clinical Trials*. Chapman & Hall/CRC. Chapter 19 (numerical integration), chapte
 (error spending).
 Lan, K. K. G. and DeMets, D. L. (1983). Discrete sequential boundaries for clinical trials.
 *Biometrika* 70, 659-663.
-Anderson, K. M. et al. ``gsDesign`` R package, ``test.type = 4`` (non-binding beta spending).
+Anderson, K. M. et al. ``gsDesign`` R package, ``test.type = 4`` (non-binding beta spending)
+and ``test.type = 3`` (binding).
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import optimize, stats
 
-from trialdesign.spending import check_info_rates, cumulative_spending
+from trialdesign.spending import check_info_rates, cumulative_spending, parse_spending
 
 __all__ = [
     "GroupSequentialDesign",
@@ -190,8 +194,9 @@ def efficacy_bounds(
         equally spaced looks.
     alpha_one_sided : float
         One-sided significance level.
-    spending : {"obf", "pocock"}
-        Lan-DeMets alpha-spending family.
+    spending : str
+        Alpha-spending choice: ``"obf"``, ``"pocock"``, ``"hsd:<gamma>"``, ``"kd:<rho>"`` or
+        ``"user:<f1>,...,1"`` (see :mod:`trialdesign.spending`).
 
     Returns
     -------
@@ -373,12 +378,44 @@ def _futility_bounds(
     return b
 
 
+def _binding_bounds(
+    t: NDArray, alpha_spend: NDArray, beta_spend: NDArray, drift: float
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    r"""Efficacy and futility boundaries of a binding design, look by look.
+
+    At look k, :math:`c_k` spends alpha under H0 and :math:`b_k` spends beta under ``drift``,
+    both over the paths that continued within :math:`(b_j, c_j)` at every earlier look. Unlike
+    the non-binding case the efficacy boundaries depend on the futility ones, so both are
+    solved together (Jennison & Turnbull 2000, section 7.2; ``gsDesign`` ``test.type = 3``).
+    """
+    rec0 = _Recursion(t, drift=0.0)
+    rec1 = _Recursion(t, drift=drift)
+    c = np.empty(t.size)
+    b = np.empty(t.size)
+    for k in range(t.size):
+        a_k, b_k_spend = alpha_spend[k], beta_spend[k]
+        if a_k <= 0.0:
+            ck = math.inf
+        else:
+            ck = _solve(lambda x, tgt=a_k: rec0.prob_above(x) - tgt, -_Z_MAX, _Z_MAX)
+        if b_k_spend <= 0.0:
+            bk = -math.inf
+        else:
+            bk = _solve(lambda x, tgt=b_k_spend: rec1.prob_below(x) - tgt, -_Z_MAX, _Z_MAX)
+        if k < t.size - 1:
+            bk = min(bk, ck)
+            rec0.advance(bk, ck)
+            rec1.advance(bk, ck)
+        c[k], b[k] = ck, bk
+    return c, b
+
+
 # -------------------------------------------------------------------------- full design
 
 
 @dataclass(frozen=True)
 class GroupSequentialDesign:
-    r"""A one-sided group-sequential design with optional non-binding futility.
+    r"""A one-sided group-sequential design with optional futility boundaries.
 
     Attributes
     ----------
@@ -387,16 +424,18 @@ class GroupSequentialDesign:
     efficacy : numpy.ndarray
         Efficacy z-boundaries :math:`c_k`.
     futility : numpy.ndarray or None
-        Non-binding futility z-boundaries :math:`b_k`, or None without futility.
+        Futility z-boundaries :math:`b_k`, or None without futility.
     alpha_one_sided, power : float
         Design error rates.
     efficacy_spending, futility_spending : str or None
-        Spending families used.
+        Spending choices used, in canonical string form (e.g. ``"hsd:-4"``).
     drift : float
         Mean of the final z-statistic under H1 that gives the target power.
     inflation_factor : float
         :math:`(\delta / (z_{1-\alpha} + z_{1-\beta}))^2`: maximum information relative to
         the fixed design with the same one-sided alpha and power.
+    binding_futility : bool
+        Whether the efficacy boundaries assume futility stops are always made.
     """
 
     info_rates: NDArray[np.float64]
@@ -408,6 +447,7 @@ class GroupSequentialDesign:
     futility_spending: str | None
     drift: float
     inflation_factor: float
+    binding_futility: bool = False
 
     @property
     def n_looks(self) -> int:
@@ -457,6 +497,7 @@ def group_sequential_design(
     power: float = 0.80,
     efficacy_spending: str = "obf",
     futility_spending: str | None = None,
+    binding_futility: bool = False,
 ) -> GroupSequentialDesign:
     r"""Group-sequential design: boundaries, drift and inflation factor.
 
@@ -465,8 +506,13 @@ def group_sequential_design(
     boundaries :math:`b_k` spend beta under :math:`\delta` (Lan-DeMets beta spending), using
     the futility region at earlier looks, and :math:`\delta` is chosen so that the final
     futility boundary meets the final efficacy boundary, :math:`b_K = c_K`. Futility is
-    non-binding: it does not change the efficacy boundaries, so it costs power (a larger
-    inflation factor) but never inflates alpha. This is ``gsDesign`` ``test.type = 4``.
+    non-binding by default: it does not change the efficacy boundaries, so it costs power (a
+    larger inflation factor) but never inflates alpha. This is ``gsDesign`` ``test.type = 4``.
+
+    With ``binding_futility=True`` efficacy and futility boundaries are solved together, the
+    efficacy boundaries assuming every futility stop is made (``gsDesign`` ``test.type = 3``,
+    ``rpact`` ``bindingFutility = TRUE``). The design is smaller, but ignoring a futility stop
+    inflates the type I error above alpha.
 
     Parameters
     ----------
@@ -476,10 +522,13 @@ def group_sequential_design(
         One-sided significance level.
     power : float
         Target power at the design alternative.
-    efficacy_spending : {"obf", "pocock"}
-        Alpha-spending family.
-    futility_spending : {"obf", "pocock"}, optional
-        Beta-spending family for non-binding futility; None for no futility boundaries.
+    efficacy_spending : str
+        Alpha-spending choice: ``"obf"``, ``"pocock"``, ``"hsd:<gamma>"``, ``"kd:<rho>"`` or
+        ``"user:<f1>,...,1"`` (see :mod:`trialdesign.spending`).
+    futility_spending : str, optional
+        Beta-spending choice, from the same families; None for no futility boundaries.
+    binding_futility : bool
+        Make futility binding. Requires ``futility_spending``.
 
     Returns
     -------
@@ -493,6 +542,11 @@ def group_sequential_design(
     if not alpha_one_sided < power < 1.0:
         raise ValueError("power must be between alpha_one_sided and 1")
     t = check_info_rates(info_rates)
+    efficacy_spending = parse_spending(efficacy_spending).label
+    if futility_spending is not None:
+        futility_spending = parse_spending(futility_spending).label
+    elif binding_futility:
+        raise ValueError("binding futility needs futility boundaries (a futility spending)")
     c = efficacy_bounds(t, alpha_one_sided, efficacy_spending)
     beta = 1.0 - power
     drift_fixed = stats.norm.isf(alpha_one_sided) + stats.norm.isf(beta)
@@ -503,18 +557,38 @@ def group_sequential_design(
         def gap(d: float) -> float:
             return float(crossing_probabilities(t, c, None, d)[0].sum()) - power
 
-    else:
+    elif not binding_futility:
         beta_spend = np.diff(cumulative_spending(futility_spending, t, beta), prepend=0.0)
 
         def gap(d: float) -> float:
-            return float(_futility_bounds(t, c, beta_spend, d)[-1] - c[-1])
+            bb = _futility_bounds(t, c, beta_spend, d)
+            if np.any(bb[:-1] >= c[:-1]):
+                return 1.0  # futility met efficacy early: the drift is past the root
+            return float(bb[-1] - c[-1])
+
+    else:
+        beta_spend = np.diff(cumulative_spending(futility_spending, t, beta), prepend=0.0)
+        alpha_spend = np.diff(
+            cumulative_spending(efficacy_spending, t, alpha_one_sided), prepend=0.0
+        )
+
+        def gap(d: float) -> float:
+            cb, bb = _binding_bounds(t, alpha_spend, beta_spend, d)
+            if np.any(bb[:-1] >= cb[:-1]):
+                # Futility met efficacy before the last look: every path has stopped, so the
+                # drift is past the root (and the last-look values are meaningless).
+                return 1.0
+            return float(bb[-1] - cb[-1])
 
     # The fixed-design drift is a lower bound; widen upwards until the root is bracketed.
     lo, hi = 0.5 * drift_fixed, 1.5 * drift_fixed
     while gap(hi) < 0:
         lo, hi = hi, 2.0 * hi
     drift = float(optimize.brentq(gap, lo, hi, xtol=_XTOL))
-    if futility_spending is not None:
+    if binding_futility:
+        c, b = _binding_bounds(t, alpha_spend, beta_spend, drift)
+        b[-1] = c[-1]
+    elif futility_spending is not None:
         b = _futility_bounds(t, c, beta_spend, drift)
         b[-1] = c[-1]
     return GroupSequentialDesign(
@@ -527,4 +601,5 @@ def group_sequential_design(
         futility_spending=futility_spending,
         drift=drift,
         inflation_factor=float((drift / drift_fixed) ** 2),
+        binding_futility=binding_futility,
     )

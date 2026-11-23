@@ -39,7 +39,7 @@ from trialdesign.boundaries import (
     expected_info_fraction,
 )
 from trialdesign.simulate import DesignSimulation, OperatingCharacteristics
-from trialdesign.spending import cumulative_spending
+from trialdesign.spending import cumulative_spending, spending_name
 
 __all__ = [
     "CONVENTIONAL_ALPHA_ONE_SIDED",
@@ -78,7 +78,14 @@ _BLUE, _ORANGE, _AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 _RED, _NEUTRAL = "#e34948", "#e1e0d9"
 _INK, _INK_2, _MUTED, _GRID = "#0b0b0b", "#52514e", "#898781", "#e1e0d9"
 
-SPENDING_NAMES = {"obf": "O'Brien-Fleming-type", "pocock": "Pocock-type"}
+SPENDING_NAMES = {"obf": "O'Brien-Fleming-type", "pocock": "Pocock-type"}  # kept for v0.1 callers
+
+
+def _short_name(spec: str) -> str:
+    """Spending name without the "Lan-DeMets" prefix, for plot legends."""
+    return spending_name(spec).removeprefix("Lan-DeMets ")
+
+
 _ENDPOINT_NAMES = {
     "normal": "Continuous (normal)",
     "binary": "Binary",
@@ -273,8 +280,9 @@ def sequential_summary(fixed_design: Summary, design: GroupSequentialDesign) -> 
     -------
     dict
         Inputs, boundaries, maximum and per-look sample size (or events), and exact operating
-        characteristics. ``type_i_error`` ignores futility (non-binding); everything under H1,
-        and the futility and expected-size entries under H0, follow futility.
+        characteristics. ``type_i_error`` ignores futility for a non-binding design and follows
+        it for a binding one; everything under H1, and the futility and expected-size entries
+        under H0, follow futility.
     """
     if not math.isclose(fixed_design["alpha_two_sided"], 2 * design.alpha_one_sided):
         raise ValueError("the fixed design must use alpha_two_sided = 2 * alpha_one_sided")
@@ -335,7 +343,7 @@ def sequential_summary(fixed_design: Summary, design: GroupSequentialDesign) -> 
         "looks": _floats(t),
         "efficacy_spending": design.efficacy_spending,
         "futility_spending": design.futility_spending,
-        "binding_futility": False,
+        "binding_futility": design.binding_futility,
         "efficacy_z": _floats(c),
         "futility_z": None if b is None else _floats(b),
         "nominal_p_one_sided": _floats(stats.norm.sf(c)),
@@ -347,7 +355,7 @@ def sequential_summary(fixed_design: Summary, design: GroupSequentialDesign) -> 
         "fixed": fixed_design,
         "sample_size": size,
         "exact": {
-            "type_i_error": float(eff0.sum()),
+            "type_i_error": float((eff0_f if design.binding_futility else eff0).sum()),
             "power": float(eff1.sum()),
             "prob_efficacy_h0": _floats(eff0_f),
             "prob_futility_h0": _floats(fut0_f),
@@ -355,6 +363,11 @@ def sequential_summary(fixed_design: Summary, design: GroupSequentialDesign) -> 
             "prob_futility_h1": _floats(fut1),
             "expected_total_h0": e0 * max_total,
             "expected_total_h1": e1 * max_total,
+            **(
+                {"type_i_error_futility_ignored": float(eff0.sum())}
+                if design.binding_futility
+                else {}
+            ),
         },
     }
 
@@ -378,14 +391,15 @@ def _oc_dict(oc: OperatingCharacteristics, n_max: float) -> Summary:
 def simulation_summary(sim: DesignSimulation, n_max: float) -> Summary:
     """Simulated operating characteristics, each with its Monte Carlo SE.
 
-    ``h0_ignore_futility`` gives the type I error of the non-binding design; ``h0`` and
-    ``h1`` follow futility. ``n_max`` is the maximum total sample size (or events).
+    ``h0_ignore_futility`` gives the type I error of a non-binding design (a binding design's
+    comes from ``h0``); ``h0`` and ``h1`` follow futility. ``n_max`` is the maximum total
+    sample size (or events).
     """
     return {
         "nsim": sim.h1.n_sim,
         "seed": sim.seed,
         "type_i_error": sim.type_i_error,
-        "type_i_error_se": sim.h0_ignore_futility.reject_prob_se,
+        "type_i_error_se": sim.type_i_error_se,
         "power": sim.power,
         "power_se": sim.h1.reject_prob_se,
         "h0_ignore_futility": _oc_dict(sim.h0_ignore_futility, n_max),
@@ -832,7 +846,12 @@ def hypothesis_text(s: Summary) -> str:
 def futility_text(s: Summary) -> str:
     if s["futility_spending"] is None:
         return "none"
-    return f"Lan-DeMets {SPENDING_NAMES[s['futility_spending']]} beta spending, non-binding"
+    kind = "binding" if s.get("binding_futility") else "non-binding"
+    return f"{spending_name(s['futility_spending'])} beta spending, {kind}"
+
+
+def efficacy_text(s: Summary) -> str:
+    return f"{spending_name(s['efficacy_spending'])} alpha spending"
 
 
 def gsd_tables(s: Summary, sim: Summary | None = None, markdown: bool = False) -> list[str]:
@@ -887,11 +906,17 @@ def gsd_tables(s: Summary, sim: Summary | None = None, markdown: bool = False) -
         markdown,
     )
     rows: list[list[Any]] = [
-        ["Type I error (futility ignored)", ex["type_i_error"]],
+        [
+            "Type I error (futility "
+            + ("followed, binding)" if s.get("binding_futility") else "ignored)"),
+            ex["type_i_error"],
+        ],
         ["Power (futility followed)", ex["power"]],
         [f"Expected {unit} under H0", ex["expected_total_h0"]],
         [f"Expected {unit} under H1", ex["expected_total_h1"]],
     ]
+    if "type_i_error_futility_ignored" in ex:
+        rows.append(["Type I error if futility is ignored", ex["type_i_error_futility_ignored"]])
     headers = ["Quantity", "Exact"]
     if sim is not None:
         headers += ["Simulated", "MC SE", "z vs exact"]
@@ -902,6 +927,10 @@ def gsd_tables(s: Summary, sim: Summary | None = None, markdown: bool = False) -
             (sim["h1"]["expected_total"], sim["h1"]["expected_total_se"]),
         ]
         exact = [ex["type_i_error"], ex["power"], ex["expected_total_h0"], ex["expected_total_h1"]]
+        if "type_i_error_futility_ignored" in ex:
+            h0i = sim["h0_ignore_futility"]
+            estimates.append((h0i["reject"], h0i["reject_se"]))
+            exact.append(ex["type_i_error_futility_ignored"])
         for row, (est, se), ref in zip(rows, estimates, exact, strict=True):
             row += [est, se, _z(est, ref, se)]
     return [boundaries, format_table(headers, rows, markdown), per_look]
@@ -978,7 +1007,7 @@ def plot_boundaries(design: GroupSequentialDesign, path: str | Path) -> Path:
     fig = _figure(7, 4.2)
     ax = fig.add_subplot()
     _style(ax)
-    eff_label = f"Efficacy ({SPENDING_NAMES[design.efficacy_spending]})"
+    eff_label = f"Efficacy ({_short_name(design.efficacy_spending)})"
     ax.plot(t, c, color=_BLUE, linewidth=2, marker="o", markersize=7, label=eff_label)
     ax.fill_between(t, c, max(c.max(), 4.0) + 0.5, color=_BLUE, alpha=0.08, linewidth=0)
     for x, y in zip(t, c, strict=True):
@@ -992,7 +1021,8 @@ def plot_boundaries(design: GroupSequentialDesign, path: str | Path) -> Path:
             color=_INK,
         )
     if b is not None:
-        fut_label = f"Futility ({SPENDING_NAMES[design.futility_spending or 'obf']}, non-binding)"
+        kind = "binding" if design.binding_futility else "non-binding"
+        fut_label = f"Futility ({_short_name(design.futility_spending or 'obf')}, {kind})"
         ax.plot(t, b, color=_ORANGE, linewidth=2, marker="s", markersize=7, label=fut_label)
         ax.fill_between(t, min(b.min(), -1.0) - 0.5, b, color=_ORANGE, alpha=0.08, linewidth=0)
         for x, y in zip(t[:-1], b[:-1], strict=True):
@@ -1232,7 +1262,7 @@ def gsd_markdown(
         ["Alpha", f"{s['alpha_one_sided']:g} one-sided"],
         ["Power", f"{s['power']:g}"],
         ["Looks (information fractions)", ", ".join(f"{v:.2f}" for v in s["looks"])],
-        ["Efficacy", f"Lan-DeMets {SPENDING_NAMES[s['efficacy_spending']]} alpha spending"],
+        ["Efficacy", efficacy_text(s)],
         ["Futility", futility_text(s)],
     ]
     boundaries, oc, per_look = gsd_tables(s, sim, markdown=True)
@@ -1267,7 +1297,15 @@ def gsd_markdown(
     ]
     if plots:
         parts.append("![Operating characteristics](oc.png)")
-    if s["futility_spending"] is not None:
+    if s["futility_spending"] is not None and s.get("binding_futility"):
+        parts.append(
+            "Futility is binding: the efficacy boundaries assume the trial always stops when it "
+            "crosses the futility boundary, which makes them lower and the trial smaller. The "
+            "type I error is alpha only if every futility stop is made; continuing past a "
+            "futility boundary inflates it (the 'futility ignored' curve in the plot shows by "
+            "how much)."
+        )
+    elif s["futility_spending"] is not None:
         parts.append(
             "Futility is non-binding: the efficacy boundaries and the type I error are computed "
             "as if the futility boundary were ignored, so alpha is controlled whether or not the "
@@ -1484,6 +1522,11 @@ def write_report(
         "to Clinical Trials*. Chapman & Hall/CRC.\n"
         "- Lan, K. K. G. and DeMets, D. L. (1983). Discrete sequential boundaries for clinical "
         "trials. *Biometrika* 70, 659-663.\n"
+        "- Hwang, I. K., Shih, W. J. and DeCani, J. S. (1990). Group sequential designs using a "
+        "family of type I error probability spending functions. *Statistics in Medicine* 9, "
+        "1439-1445.\n"
+        "- Kim, K. and DeMets, D. L. (1987). Design and analysis of group sequential tests based "
+        "on the type I error spending rate function. *Biometrika* 74, 149-154.\n"
         "- Schoenfeld, D. A. (1983). Sample-size formula for the proportional-hazards "
         "regression model. *Biometrics* 39, 499-503.\n"
         "- O'Hagan, A., Stevens, J. W. and Campbell, M. J. (2005). Assurance in clinical trial "

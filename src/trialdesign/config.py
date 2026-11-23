@@ -14,9 +14,9 @@ A design file has up to six tables. Every key has a command-line flag of the sam
 
     [sequential]      # group-sequential looks; leave out for a fixed design
     looks = [0.33, 0.67, 1.0]
-    efficacy = "obf"
-    futility = "pocock"
-    binding_futility = false
+    efficacy = "obf"           # or "pocock", "hsd:-4", "kd:3", "user:0.1,0.4,1"
+    futility = "pocock"        # same choices, or "none"
+    binding_futility = false   # true: smaller trial, alpha holds only if futility is followed
 
     [accrual]         # survival only: patients and calendar time (months) from events
     median_control = 12.0

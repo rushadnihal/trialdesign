@@ -206,7 +206,7 @@ def test_max_sample_size_reproduces_survival_drift() -> None:
     [
         (lambda: boundaries.efficacy_bounds(3, 0.6), "alpha_one_sided"),
         (lambda: boundaries.efficacy_bounds([0.6, 0.4, 1.0]), "increase"),
-        (lambda: boundaries.efficacy_bounds(3, spending="linear"), "spending must be one of"),
+        (lambda: boundaries.efficacy_bounds(3, spending="linear"), 'spending must be "obf"'),
         (lambda: boundaries.group_sequential_design(3, power=0.01), "power"),
         (lambda: boundaries.crossing_probabilities(2, [2.0]), "one boundary per look"),
         (lambda: boundaries.crossing_probabilities(2, [2, 2], [3, 2]), "must not exceed"),

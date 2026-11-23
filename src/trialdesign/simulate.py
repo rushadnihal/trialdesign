@@ -313,7 +313,8 @@ class DesignSimulation:
         Entropy of the seed sequence used, so the run can be repeated.
     h0_ignore_futility : OperatingCharacteristics
         Under H0 with futility ignored: ``reject_prob`` is the type I error that a regulator
-        will ask about for a non-binding design.
+        will ask about for a non-binding design (for a binding design it shows how far alpha
+        rises if futility is not followed).
     h0 : OperatingCharacteristics
         Under H0 with futility followed: rejection rate, futility stops and expected
         information when the sponsor does stop for futility.
@@ -328,8 +329,17 @@ class DesignSimulation:
     h1: OperatingCharacteristics
 
     @property
+    def _h0_alpha(self) -> OperatingCharacteristics:
+        return self.h0 if self.design.binding_futility else self.h0_ignore_futility
+
+    @property
     def type_i_error(self) -> float:
-        return self.h0_ignore_futility.reject_prob
+        """Futility ignored for a non-binding design, followed for a binding one."""
+        return self._h0_alpha.reject_prob
+
+    @property
+    def type_i_error_se(self) -> float:
+        return self._h0_alpha.reject_prob_se
 
     @property
     def power(self) -> float:
