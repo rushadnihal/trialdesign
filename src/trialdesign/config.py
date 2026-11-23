@@ -8,6 +8,7 @@ A design file has up to four tables. Every key has a command-line flag of the sa
     [design]          # endpoint, effect size and error rates
     endpoint = "survival"
     hr = 0.70
+    # hr0 = 1.3       # non-inferiority: hazard ratio under H0 (delta0 for normal/binary)
     alpha_one_sided = 0.025
     power = 0.80
 
@@ -48,6 +49,8 @@ SECTIONS: dict[str, frozenset[str]] = {
             "pc",
             "pt",
             "hr",
+            "delta0",
+            "hr0",
             "prob_event",
             "allocation",
             "alpha_one_sided",

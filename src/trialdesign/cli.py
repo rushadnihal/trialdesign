@@ -69,6 +69,19 @@ SdOpt = Annotated[float | None, typer.Option(help="Normal: common standard devia
 PcOpt = Annotated[float | None, typer.Option(help="Binary: control response rate.")]
 PtOpt = Annotated[float | None, typer.Option(help="Binary: treatment response rate.")]
 HrOpt = Annotated[float | None, typer.Option(help="Survival: hazard ratio (T vs C).")]
+Delta0Opt = Annotated[
+    float | None,
+    typer.Option(
+        help="Normal/binary non-inferiority: difference (T - C) under H0, e.g. -0.1 for a "
+        "margin of 0.1 when higher is better [default: 0, superiority]."
+    ),
+]
+Hr0Opt = Annotated[
+    float | None,
+    typer.Option(
+        help="Survival non-inferiority: hazard ratio under H0, e.g. 1.3 [default: 1, superiority]."
+    ),
+]
 ProbEventOpt = Annotated[
     float | None, typer.Option(help="Survival: probability of an event by the final analysis.")
 ]
@@ -250,6 +263,11 @@ def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
     effect: dict[str, Any] = {k: _number(d[k], k) for k in _REQUIRED[endpoint]}
     if endpoint == "survival" and d.get("prob_event") is not None:
         effect["prob_event"] = _number(d["prob_event"], "prob_event")
+    null_key, other = ("hr0", "delta0") if endpoint == "survival" else ("delta0", "hr0")
+    if d.get(other) is not None:
+        raise ValueError(f"--{other} does not apply to the {endpoint} endpoint; use --{null_key}")
+    if d.get(null_key) is not None:
+        effect[null_key] = _number(d[null_key], null_key)
     method = str(d.get("method", "z"))
     if method not in ("z", "t"):
         raise ValueError('method must be "z" or "t"')
@@ -391,6 +409,7 @@ def _print_sequential(s: dict[str, Any], sim: dict[str, Any] | None = None) -> N
     pairs: dict[str, Any] = {
         "endpoint": s["endpoint"],
         "effect": report.effect_text(s),
+        "hypothesis": report.hypothesis_text(s),
         "allocation": s["allocation"],
         "alpha_one_sided": s["alpha_one_sided"],
         "power": s["power"],
@@ -477,6 +496,8 @@ def design(
     pc: PcOpt = None,
     pt: PtOpt = None,
     hr: HrOpt = None,
+    delta0: Delta0Opt = None,
+    hr0: Hr0Opt = None,
     prob_event: ProbEventOpt = None,
     alpha_one_sided: AlphaOneOpt = None,
     alpha_two_sided: AlphaTwoOpt = None,
@@ -509,7 +530,7 @@ def design(
         return
     if out["design"] == "fixed":
         typer.echo(f"trialdesign {__version__} | fixed design | alpha is two-sided")
-        _print_pairs({k: v for k, v in out.items()})
+        _print_pairs({"hypothesis": report.hypothesis_text(out), **out})
         return
     typer.echo(f"trialdesign {__version__} | group-sequential design | alpha is one-sided")
     _print_sequential(out)
@@ -524,6 +545,8 @@ def simulate(
     pc: PcOpt = None,
     pt: PtOpt = None,
     hr: HrOpt = None,
+    delta0: Delta0Opt = None,
+    hr0: Hr0Opt = None,
     prob_event: ProbEventOpt = None,
     alpha_one_sided: AlphaOneOpt = None,
     alpha_two_sided: AlphaTwoOpt = None,
@@ -621,6 +644,8 @@ def report_cmd(
     pc: PcOpt = None,
     pt: PtOpt = None,
     hr: HrOpt = None,
+    delta0: Delta0Opt = None,
+    hr0: Hr0Opt = None,
     prob_event: ProbEventOpt = None,
     alpha_one_sided: AlphaOneOpt = None,
     alpha_two_sided: AlphaTwoOpt = None,
