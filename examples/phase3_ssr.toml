@@ -1,0 +1,24 @@
+# Phase 3 trial with promising-zone sample size re-estimation at the halfway look.
+# Run:  trialdesign ssr --config examples/phase3_ssr.toml
+#       trialdesign ssr --config examples/phase3_ssr.toml --z1 1.5     # apply the rule
+#       trialdesign report --config examples/phase3_ssr.toml --out results/
+
+[design]
+endpoint = "normal"
+delta = 0.30              # difference in means the trial is powered for
+sd = 1.0
+alpha_one_sided = 0.025
+power = 0.80
+
+[sequential]
+efficacy = "obf"          # looks are [interim_fraction, 1.0]
+
+[adaptation]
+interim_fraction = 0.5    # information fraction of the interim
+cp_min = 0.36             # promising zone: cp_min <= CP at the observed trend < cp_target
+cp_target = 0.80          # raise the sample size to reach this conditional power
+max_factor = 2.0          # but never beyond twice the planned maximum
+
+[simulation]
+nsim = 200000
+seed = 2026

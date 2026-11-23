@@ -10,7 +10,7 @@ prints the package version, so a result can be reproduced.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -18,7 +18,7 @@ from typing import Annotated, Any, cast
 import numpy as np
 import typer
 
-from trialdesign import __version__, bayes, config, fixed, report
+from trialdesign import __version__, bayes, config, fixed, report, ssr
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
 from trialdesign.simulate import simulate_design
 
@@ -172,6 +172,30 @@ DesignPriorCOpt = Annotated[
 DesignPriorTOpt = Annotated[
     str | None,
     typer.Option(help='Bayes assurance: treatment design prior, a rate "0.45" or Beta "a,b".'),
+]
+InterimFractionOpt = Annotated[
+    float | None,
+    typer.Option(help="SSR: information fraction of the interim look [default: 0.5]."),
+]
+CpMinOpt = Annotated[
+    float | None,
+    typer.Option(help="SSR: lower edge of the promising zone (conditional power) [default: 0.36]."),
+]
+CpTargetOpt = Annotated[
+    float | None,
+    typer.Option(help="SSR: conditional power aimed for in the promising zone [default: 0.8]."),
+]
+MaxFactorOpt = Annotated[
+    float | None,
+    typer.Option(
+        help="SSR: cap on total patients, as a multiple of the planned maximum [default: 2]."
+    ),
+]
+Z1Opt = Annotated[
+    float | None,
+    typer.Option(
+        help="SSR: observed interim z-statistic; prints the zone and the new sample size."
+    ),
 ]
 XcOpt = Annotated[int | None, typer.Option(help="Bayes: observed control responders at interim.")]
 XtOpt = Annotated[int | None, typer.Option(help="Bayes: observed treatment responders at interim.")]
@@ -429,6 +453,89 @@ def _bayes_run(design: bayes.BayesianInterimDesign, extra: dict[str, Any], nsim,
 
 
 # --------------------------------------------------------------------------- output
+
+
+def _resolve_adaptation(
+    cfg: config.Config, flags: dict[str, Any], required: bool
+) -> dict[str, Any] | None:
+    a = {k: v for k, v in config.merge(cfg, "adaptation", flags).items() if v is not None}
+    if not a and not required:
+        return None
+    return {
+        "interim": _number(a.get("interim_fraction", 0.5), "interim_fraction"),
+        "cp_min": _number(a.get("cp_min", 0.36), "cp_min"),
+        "cp_target": _number(a.get("cp_target", 0.80), "cp_target"),
+        "max_factor": _number(a.get("max_factor", 2.0), "max_factor"),
+        "z1": None if a.get("z1") is None else _number(a["z1"], "z1"),
+    }
+
+
+def _ssr_flags(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any]) -> dict:
+    """Flags with looks set to [interim_fraction, 1]; any other looks given is an error."""
+    looks = config.merge(cfg, "sequential", flags).get("looks")
+    two = [adapt["interim"], 1.0]
+    if looks is not None and _looks(looks) not in (2, two):
+        raise ValueError(
+            "sample size re-estimation uses two looks, [interim_fraction, 1]; "
+            "leave out --looks or set interim_fraction in [adaptation]"
+        )
+    return {**flags, "looks": two}
+
+
+def _ssr_run(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any], nsim, seed):
+    """The planned two-look design, the adaptive design and its summary."""
+    inp = _resolve_design(cfg, _ssr_flags(cfg, flags, adapt))
+    if inp.endpoint == "survival":
+        raise ValueError(
+            "sample size re-estimation is for normal and binary endpoints (re-estimating "
+            "events for survival is not supported)"
+        )
+    gsd, planned = _sequential(inp)
+    design = ssr.SSRDesign(
+        gsd, cp_min=adapt["cp_min"], cp_target=adapt["cp_target"], max_factor=adapt["max_factor"]
+    )
+    sims = None
+    if nsim is not None:
+        rng = np.random.default_rng(seed)
+        sims = [
+            design.simulate(0.0, nsim, rng, use_futility=False),
+            design.simulate(gsd.drift, nsim, rng),
+        ]
+        sims = [replace(x, seed=seed) for x in sims]
+    return design, report.ssr_summary(planned, design, adapt["z1"], sims)
+
+
+def _print_ssr(s: dict[str, Any]) -> None:
+    planned = s["planned"]
+    _print_pairs(
+        {
+            "endpoint": planned["endpoint"],
+            "effect": report.effect_text(planned),
+            "hypothesis": report.hypothesis_text(planned),
+            "alpha_one_sided": planned["alpha_one_sided"],
+            "power (planned)": planned["power"],
+            "efficacy": f"Lan-DeMets {report.SPENDING_NAMES[planned['efficacy_spending']]}",
+            "futility": report.futility_text(planned),
+            "interim_fraction": s["interim_fraction"],
+            "patients at interim": s["n_interim"],
+            "planned max patients": s["n_planned"],
+            "cap on patients": s["n_cap"],
+            "efficacy z (interim, final)": f"{s['c1']:.4f}, {s['c2']:.4f}",
+            "promising zone (CP)": f"{s['cp_min']:g} to {s['cp_target']:g}",
+        }
+    )
+    zones, oc, *sim = report.ssr_tables(s)
+    typer.echo(f"\nZones\n{zones}\n\nOperating characteristics (exact)\n{oc}")
+    if sim:
+        typer.echo(f"\nSimulated checks\n{sim[0]}")
+    if "interim" in s:
+        i = s["interim"]
+        typer.echo(
+            f"\nInterim z1 = {i['z1']:.3f}: {i['zone']} zone, CP at observed trend "
+            f"{i['cp_observed']:.4f} (at design effect {i['cp_design']:.4f}); total patients "
+            f"{i['n_total']}, CP at observed trend after re-estimation "
+            f"{i['cp_observed_after']:.4f}"
+        )
 
 
 def _fail(exc: Exception) -> typer.Exit:
@@ -698,6 +805,60 @@ def bayes_cmd(
     _print_bayes(s, sim)
 
 
+@app.command(name="ssr")
+def ssr_cmd(
+    config_file: ConfigOpt = None,
+    endpoint: EndpointOpt = None,
+    delta: DeltaOpt = None,
+    sd: SdOpt = None,
+    pc: PcOpt = None,
+    pt: PtOpt = None,
+    hr: HrOpt = None,
+    delta0: Delta0Opt = None,
+    alpha_one_sided: AlphaOneOpt = None,
+    alpha_two_sided: AlphaTwoOpt = None,
+    power: PowerOpt = None,
+    allocation: AllocationOpt = None,
+    method: MethodOpt = None,
+    efficacy: EfficacyOpt = None,
+    futility: FutilityOpt = None,
+    interim_fraction: InterimFractionOpt = None,
+    cp_min: CpMinOpt = None,
+    cp_target: CpTargetOpt = None,
+    max_factor: MaxFactorOpt = None,
+    z1: Z1Opt = None,
+    nsim: NsimOpt = None,
+    seed: SeedOpt = None,
+    as_json: JsonOpt = False,
+) -> None:
+    """Promising-zone sample size re-estimation at one interim (normal and binary endpoints).
+
+    Plans a two-look group-sequential design (looks at --interim-fraction and 1), then, in
+    the promising zone of conditional power at the observed trend, raises the second-stage
+    sample size to reach --cp-target, up to --max-factor times the planned maximum. The final
+    test is the Cui-Hung-Wang weighted inverse-normal test, so alpha is controlled exactly.
+    Prints the zones and exact operating characteristics; --z1 applies the rule to an
+    observed interim result, and --nsim adds simulated checks.
+    """
+    flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
+    try:
+        cfg = config.load_config(config_file)
+        adapt = _resolve_adaptation(cfg, flags, required=True)
+        assert adapt is not None
+        n_sim, seed_used = _simulation_settings(cfg, flags, None)
+        _, s = _ssr_run(cfg, flags, adapt, n_sim, seed_used)
+    except ValueError as exc:
+        raise _fail(exc) from exc
+    if as_json:
+        _print_json(s)
+        return
+    seed_text = f" | seed {seed_used}" if seed_used is not None else ""
+    typer.echo(
+        f"trialdesign {__version__}{seed_text} | sample size re-estimation | alpha is one-sided"
+    )
+    _print_ssr(s)
+
+
 @app.command(name="report")
 def report_cmd(
     config_file: ConfigOpt = None,
@@ -740,6 +901,11 @@ def report_cmd(
     design_prior_t: DesignPriorTOpt = None,
     xc: XcOpt = None,
     xt: XtOpt = None,
+    interim_fraction: InterimFractionOpt = None,
+    cp_min: CpMinOpt = None,
+    cp_target: CpTargetOpt = None,
+    max_factor: MaxFactorOpt = None,
+    z1: Z1Opt = None,
     nsim: NsimOpt = None,
     seed: SeedOpt = None,
     as_json: JsonOpt = False,
@@ -761,9 +927,13 @@ def report_cmd(
                 "nothing to report: give --config, --endpoint and --looks, or --n and --interim"
             )
         n_sim, seed_used = _simulation_settings(cfg, flags, None)
-        gsd_part = bayes_part = None
+        gsd_part = bayes_part = ssr_part = None
+        adapt = _resolve_adaptation(cfg, flags, required=False) if want_gsd else None
+        if adapt is not None:
+            ssr_d, ssr_s = _ssr_run(cfg, flags, adapt, n_sim, seed_used)
+            ssr_part = (ssr_d, ssr_s)
         if want_gsd:
-            inp = _resolve_design(cfg, flags)
+            inp = _resolve_design(cfg, flags if adapt is None else _ssr_flags(cfg, flags, adapt))
             if inp.looks is None:
                 raise ValueError("the report needs a group-sequential design: give --looks")
             gsd, s = _sequential(inp)
@@ -778,7 +948,12 @@ def report_cmd(
         files: list[Path] = []
         if out is not None:
             files = report.write_report(
-                out, __version__, source=source, gsd=gsd_part, bayes_design=bayes_part
+                out,
+                __version__,
+                source=source,
+                gsd=gsd_part,
+                bayes_design=bayes_part,
+                ssr_design=ssr_part,
             )
     except ValueError as exc:
         raise _fail(exc) from exc
@@ -788,6 +963,8 @@ def report_cmd(
             payload["design"], payload["simulation"] = gsd_part[1], gsd_part[2]
         if bayes_part is not None:
             payload["bayes"], payload["bayes_simulation"] = bayes_part[1], bayes_part[2]
+        if ssr_part is not None:
+            payload["ssr"] = ssr_part[1]
         _print_json(payload)
         return
     if out is not None:
@@ -800,5 +977,7 @@ def report_cmd(
     typer.echo(f"<!-- trialdesign {__version__}{seed_text}; add --out DIR for the plots -->\n")
     if gsd_part is not None:
         typer.echo(report.gsd_markdown(gsd_part[1], gsd_part[2], plots=False) + "\n")
+    if ssr_part is not None:
+        typer.echo(report.ssr_markdown(ssr_part[1], plots=False) + "\n")
     if bayes_part is not None:
         typer.echo(report.bayes_markdown(bayes_part[1], bayes_part[2], plots=False))

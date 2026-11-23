@@ -32,7 +32,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
 
-from trialdesign import accrual, bayes, fixed
+from trialdesign import accrual, bayes, fixed, ssr
 from trialdesign.boundaries import (
     GroupSequentialDesign,
     crossing_probabilities,
@@ -63,8 +63,12 @@ __all__ = [
     "plot_boundaries",
     "plot_decision_map",
     "plot_gsd_oc",
+    "plot_ssr",
     "sequential_summary",
     "simulation_summary",
+    "ssr_markdown",
+    "ssr_summary",
+    "ssr_tables",
     "success_text",
     "write_report",
 ]
@@ -388,6 +392,219 @@ def simulation_summary(sim: DesignSimulation, n_max: float) -> Summary:
         "h0": _oc_dict(sim.h0, n_max),
         "h1": _oc_dict(sim.h1, n_max),
     }
+
+
+SSR_EFFECTS = (1.0, 0.85, 0.7)  # true effect / design effect for the SSR OC table
+
+
+def _ssr_oc_dict(oc: ssr.SSROperatingCharacteristics, n_max: float) -> Summary:
+    return {
+        "reject_prob": oc.reject_prob,
+        "prob_efficacy_interim": oc.prob_efficacy_interim,
+        "prob_futility_interim": oc.prob_futility_interim,
+        "prob_zone": dict(oc.prob_zone),
+        "expected_n_total": oc.expected_n_fraction * n_max,
+    }
+
+
+def ssr_summary(
+    planned: Summary,
+    design: ssr.SSRDesign,
+    z1: float | None = None,
+    sim: Sequence[ssr.SSRSimulation] | None = None,
+) -> Summary:
+    """Promising-zone sample size re-estimation as a dictionary.
+
+    Parameters
+    ----------
+    planned : dict
+        :func:`sequential_summary` of the planned two-look design (``design.gsd``).
+    design : SSRDesign
+        The adaptive design.
+    z1 : float, optional
+        Observed interim z-statistic: adds the conditional power, the zone and the
+        re-estimated sample size.
+    sim : sequence of SSRSimulation, optional
+        Simulations under H0 (futility ignored) and the design alternative, as checks.
+
+    Returns
+    -------
+    dict
+        Sample sizes are in patients: the planned maximum ``n_planned``, the cap
+        ``n_cap``, and expected totals. ``exact`` holds the type I error (CHW and naive
+        tests, futility ignored) and, for each true effect in :data:`SSR_EFFECTS` as a
+        fraction of the design effect, the adaptive and the planned design's power and
+        expected sample size (futility followed).
+    """
+    size = planned["sample_size"]
+    if size["unit"] != "patients":
+        raise ValueError("sample size re-estimation is for normal and binary endpoints")
+    n_max = size["max_n_total_ceil"]
+    n1 = size["look_total_ceil"][0]
+    n_cap = _ceil(n_max * design.max_factor)
+    drift = design.gsd.drift
+    zones = {
+        "cp_min": design._z_at_cp(design.cp_min),
+        "cp_target": design._z_at_cp(design.cp_target),
+    }
+    h0 = design.operating_characteristics(0.0, use_futility=False)
+    h0_naive = design.operating_characteristics(0.0, use_futility=False, test="naive")
+    effects = []
+    for theta in SSR_EFFECTS:
+        oc = design.operating_characteristics(theta * drift)
+        eff, _ = design.gsd.crossing_probabilities(theta * drift)
+        effects.append(
+            {
+                "effect_ratio": theta,
+                **_ssr_oc_dict(oc, n_max),
+                "planned_reject_prob": float(eff.sum()),
+                "planned_expected_n_total": design.gsd.expected_info_fraction(theta * drift)
+                * n_max,
+            }
+        )
+    out: Summary = {
+        "planned": planned,
+        "interim_fraction": design.t1,
+        "cp_min": design.cp_min,
+        "cp_target": design.cp_target,
+        "max_factor": design.max_factor,
+        "n_planned": n_max,
+        "n_interim": n1,
+        "n_cap": n_cap,
+        "c1": design.c1,
+        "c2": design.c2,
+        "b1": design.b1,
+        "zone_z1": zones,
+        "zone_effect_ratio": {
+            k: None if z is None else z / math.sqrt(design.t1) / drift for k, z in zones.items()
+        },
+        "exact": {
+            "type_i_error": h0.reject_prob,
+            "type_i_error_naive": h0_naive.reject_prob,
+            "h0": _ssr_oc_dict(h0, n_max),
+            "effects": effects,
+        },
+    }
+    if z1 is not None:
+        m = float(design.stage2_multiplier(z1))
+        zone = str(design.zone(z1))
+        n2_planned = n_max - n1
+        n_total = n1 if zone in ("efficacy", "futility") else n1 + _ceil(m * n2_planned)
+        out["interim"] = {
+            "z1": z1,
+            "zone": zone,
+            "observed_effect_ratio": z1 / math.sqrt(design.t1) / drift,
+            "cp_observed": float(design.conditional_power(z1)),
+            "cp_design": float(design.conditional_power(z1, drift=drift)),
+            "stage2_multiplier": m,
+            "n_total": n_total,
+            "cp_observed_after": float(design.conditional_power(z1, m=m)),
+        }
+    if sim:
+        out["simulation"] = [
+            {
+                "effect_ratio": x.drift / drift,
+                "nsim": x.n_sim,
+                "seed": x.seed,
+                "reject_prob": x.reject_prob,
+                "reject_prob_se": x.reject_prob_se,
+                "reject_prob_naive": x.reject_prob_naive,
+                "reject_prob_naive_se": x.reject_prob_naive_se,
+                "expected_n_total": x.expected_n_fraction * n_max,
+                "expected_n_total_se": x.expected_n_fraction_se * n_max,
+                "prob_zone": dict(x.prob_zone),
+            }
+            for x in sim
+        ]
+    return out
+
+
+def ssr_tables(s: Summary, markdown: bool = False) -> list[str]:
+    """Tables for an SSR summary: the zones, then operating characteristics."""
+
+    def z_or_dash(z: float | None) -> str:
+        return "-" if z is None else f"{z:.3f}"
+
+    zl, zh = s["zone_z1"]["cp_min"], s["zone_z1"]["cp_target"]
+    el, eh = s["zone_effect_ratio"]["cp_min"], s["zone_effect_ratio"]["cp_target"]
+    lo_txt = "-inf" if s["b1"] is None else f"{s['b1']:.3f}"
+    zone_rows: list[list[Any]] = []
+    if s["b1"] is not None:
+        zone_rows.append(["Futility (stop)", f"< {lo_txt}", "", s["n_interim"]])
+    zone_rows += [
+        ["Unfavourable", f"< {z_or_dash(zl)}", f"< {z_or_dash(el)}", s["n_planned"]],
+        [
+            "Promising",
+            f"{z_or_dash(zl)} to {z_or_dash(zh)}",
+            f"{z_or_dash(el)} to {z_or_dash(eh)}",
+            f"{s['n_planned']} to {s['n_cap']}",
+        ],
+        ["Favourable", f"{z_or_dash(zh)} to {s['c1']:.3f}", f">= {z_or_dash(eh)}", s["n_planned"]],
+        ["Efficacy (stop)", f">= {s['c1']:.3f}", "", s["n_interim"]],
+    ]
+    zones = format_table(
+        ["Zone", "Interim z1", "Observed / design effect", "Total patients"], zone_rows, markdown
+    )
+    ex = s["exact"]
+    rows: list[list[Any]] = [
+        [
+            "H0 (futility ignored), CHW test",
+            ex["type_i_error"],
+            "",
+            ex["h0"]["expected_n_total"],
+            "",
+            ex["h0"]["prob_zone"]["promising"],
+        ],
+        ["H0, naive pooled test", ex["type_i_error_naive"], "", "", "", ""],
+    ]
+    for e in ex["effects"]:
+        rows.append(
+            [
+                f"Effect {e['effect_ratio']:g} x design",
+                e["reject_prob"],
+                e["planned_reject_prob"],
+                e["expected_n_total"],
+                e["planned_expected_n_total"],
+                e["prob_zone"]["promising"],
+            ]
+        )
+    oc = format_table(
+        [
+            "Scenario",
+            "P(reject) adaptive",
+            "P(reject) planned",
+            "E[patients] adaptive",
+            "E[patients] planned",
+            "P(promising)",
+        ],
+        rows,
+        markdown,
+    )
+    out = [zones, oc]
+    if "simulation" in s:
+        sim_rows = []
+        exact_by_ratio = {e["effect_ratio"]: e for e in ex["effects"]}
+        for x in s["simulation"]:
+            r = round(x["effect_ratio"], 12)
+            exact = ex["type_i_error"] if r == 0 else exact_by_ratio.get(r, {}).get("reject_prob")
+            sim_rows.append(
+                [
+                    "H0 (futility ignored)" if r == 0 else f"Effect {r:g} x design",
+                    exact,
+                    x["reject_prob"],
+                    x["reject_prob_se"],
+                    _z(x["reject_prob"], exact, x["reject_prob_se"]) if exact is not None else "",
+                    x["reject_prob_naive"],
+                ]
+            )
+        out.append(
+            format_table(
+                ["Scenario", "Exact", "Simulated", "MC SE", "z vs exact", "Simulated, naive test"],
+                sim_rows,
+                markdown,
+            )
+        )
+    return out
 
 
 def _bayes_oc_dict(oc: bayes.BayesianOC) -> Summary:
@@ -853,6 +1070,62 @@ def plot_gsd_oc(
     return out
 
 
+def plot_ssr(design: ssr.SSRDesign, path: str | Path, n_planned: float) -> Path:
+    """The promising-zone rule and its effect on power, saved as PNG.
+
+    Left: total patients against the interim z-statistic, with the zones shaded. Right:
+    power of the adaptive and the planned design against the true effect (futility
+    followed), on the scale of the design effect.
+    """
+    t1 = design.t1
+    lo = design.b1 if design.b1 is not None else -1.0
+    z = np.linspace(min(lo, -1.0), design.c1 + 0.5, 600)
+    zones = design.zone(z)
+    cont = ~np.isin(zones, ("efficacy", "futility"))
+    n_tot = np.where(
+        cont, (t1 + (1 - t1) * design.stage2_multiplier(z)) * n_planned, t1 * n_planned
+    )
+    fig = _figure(9, 3.8)
+    ax1, ax2 = fig.subplots(1, 2)
+    for ax in (ax1, ax2):
+        _style(ax)
+    prom = zones == "promising"
+    if prom.any():
+        ax1.axvspan(z[prom][0], z[prom][-1], color=_ORANGE, alpha=0.12, linewidth=0)
+        ax1.annotate(
+            "promising",
+            (0.5 * (z[prom][0] + z[prom][-1]), n_planned * design.max_factor),
+            xytext=(0, 4),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+            color=_INK_2,
+        )
+    ax1.axvline(design.c1, color=_MUTED, linewidth=0.8, linestyle=":")
+    if design.b1 is not None:
+        ax1.axvline(design.b1, color=_MUTED, linewidth=0.8, linestyle=":")
+    ax1.plot(z, n_tot, color=_BLUE, linewidth=2)
+    ax1.set_xlabel("Interim z-statistic")
+    ax1.set_ylabel("Total patients")
+    ax1.set_ylim(0, n_planned * design.max_factor * 1.12)
+    ax1.set_title("Re-estimated sample size", loc="left", fontsize=11, color=_INK)
+    theta = np.linspace(0.0, 1.5, 31)
+    adaptive = [design.operating_characteristics(th * design.gsd.drift).reject_prob for th in theta]
+    planned = [design.gsd.crossing_probabilities(th * design.gsd.drift)[0].sum() for th in theta]
+    ax2.plot(theta, adaptive, color=_BLUE, linewidth=2, label="Adaptive (CHW test)")
+    ax2.plot(theta, planned, color=_AQUA, linewidth=2, linestyle="--", label="Planned design")
+    ax2.axhline(design.gsd.power, color=_MUTED, linewidth=0.8, linestyle=":")
+    ax2.set_xlabel("True effect / design effect")
+    ax2.set_ylabel("P(reject H0)")
+    ax2.set_ylim(0, 1.02)
+    ax2.set_title("Power curve", loc="left", fontsize=11, color=_INK)
+    ax2.legend(frameon=False, fontsize=9, loc="lower right")
+    fig.tight_layout()
+    out = Path(path)
+    fig.savefig(out)
+    return out
+
+
 def plot_decision_map(design: bayes.BayesianInterimDesign, path: str | Path) -> Path:
     """Interim go / continue / no-go regions over the responder counts, saved as PNG."""
     from matplotlib.colors import ListedColormap
@@ -1102,6 +1375,46 @@ def bayes_markdown(
     return "\n\n".join(p for p in parts if p)
 
 
+def ssr_markdown(s: Summary, plots: bool = True) -> str:
+    """Markdown section for promising-zone sample size re-estimation."""
+    zones, oc, *sim = ssr_tables(s, markdown=True)
+    ex = s["exact"]
+    first = ex["effects"][0]
+    parts = [
+        "## Sample size re-estimation",
+        f"At the interim ({s['interim_fraction']:.2f} of the planned information, "
+        f"{s['n_interim']} patients), the conditional power at the observed trend decides the "
+        f"second stage. In the promising zone (conditional power {s['cp_min']:g} to "
+        f"{s['cp_target']:g}) the sample size is raised to reach {s['cp_target']:g}, up to "
+        f"{s['n_cap']} patients ({s['max_factor']:g} times the planned {s['n_planned']}). "
+        "Elsewhere the planned sample size is kept (Mehta and Pocock 2011).",
+        zones,
+        "The final test weights the stages by their *planned* information (Cui, Hung and Wang "
+        f"1999), so the type I error stays at {ex['type_i_error']:.4f} whatever the interim "
+        f"result. Pooling all patients instead gives {ex['type_i_error_naive']:.4f}. At the "
+        f"design effect the adaptive design has power {first['reject_prob']:.3f} "
+        f"(planned {first['planned_reject_prob']:.3f}) with "
+        f"{first['expected_n_total']:.0f} expected patients "
+        f"(planned {first['planned_expected_n_total']:.0f}). Exact values, by integration over "
+        "the interim z-statistic:",
+        oc,
+    ]
+    if sim:
+        parts += ["Simulated checks:", sim[0]]
+    if "interim" in s:
+        i = s["interim"]
+        parts.append(
+            f"**Observed interim z = {i['z1']:.3f}** (observed effect "
+            f"{i['observed_effect_ratio']:.2f} x design): {i['zone']} zone, conditional power "
+            f"{i['cp_observed']:.3f} at the observed trend ({i['cp_design']:.3f} at the design "
+            f"effect). Total patients: {i['n_total']}; conditional power at the observed "
+            f"trend after re-estimation {i['cp_observed_after']:.3f}."
+        )
+    if plots:
+        parts.append("![Re-estimated sample size against the interim z, and power curves](ssr.png)")
+    return "\n\n".join(parts)
+
+
 def write_report(
     out_dir: str | Path,
     version: str,
@@ -1109,6 +1422,7 @@ def write_report(
     source: str | None = None,
     gsd: tuple[GroupSequentialDesign, Summary, Summary | None] | None = None,
     bayes_design: tuple[bayes.BayesianInterimDesign, Summary, Summary | None] | None = None,
+    ssr_design: tuple[ssr.SSRDesign, Summary] | None = None,
 ) -> list[Path]:
     """Write ``report.md`` and its PNG plots into ``out_dir`` (created if needed).
 
@@ -1124,6 +1438,8 @@ def write_report(
         Group-sequential part: writes ``boundaries.png`` and ``oc.png``.
     bayes_design : (BayesianInterimDesign, summary, simulation summary or None), optional
         Bayesian part: writes ``bayes_oc.png`` and ``decision_map.png``.
+    ssr_design : (SSRDesign, summary), optional
+        Sample size re-estimation, reported after the planned design: writes ``ssr.png``.
 
     Returns
     -------
@@ -1153,6 +1469,10 @@ def write_report(
         written.append(plot_boundaries(design, out / "boundaries.png"))
         written.append(plot_gsd_oc(design, out / "oc.png", n_max, s["sample_size"]["unit"]))
         parts.append(gsd_markdown(s, sim))
+    if ssr_design is not None:
+        sd, ss = ssr_design
+        written.append(plot_ssr(sd, out / "ssr.png", ss["n_planned"]))
+        parts.append(ssr_markdown(ss))
     if bayes_design is not None:
         bd, s, sim = bayes_design
         written.append(plot_bayes_oc(bd, s["p_control"], s["p_treatment"], out / "bayes_oc.png"))
@@ -1169,7 +1489,11 @@ def write_report(
         "- O'Hagan, A., Stevens, J. W. and Campbell, M. J. (2005). Assurance in clinical trial "
         "design. *Pharmaceutical Statistics* 4, 187-201.\n"
         "- Lee, J. J. and Liu, D. D. (2008). A predictive probability design for phase II "
-        "cancer clinical trials. *Clinical Trials* 5, 93-106.",
+        "cancer clinical trials. *Clinical Trials* 5, 93-106.\n"
+        "- Cui, L., Hung, H. M. J. and Wang, S.-J. (1999). Modification of sample size in group "
+        "sequential clinical trials. *Biometrics* 55, 853-857.\n"
+        "- Mehta, C. R. and Pocock, S. J. (2011). Adaptive increase in sample size when interim "
+        "results are promising. *Statistics in Medicine* 30, 3267-3284.",
     ]
     md = out / "report.md"
     md.write_text("\n\n".join(parts) + "\n", encoding="utf-8")

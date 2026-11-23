@@ -1,6 +1,6 @@
 """Design files: read a TOML design and merge it with command-line flags.
 
-A design file has up to five tables. Every key has a command-line flag of the same name
+A design file has up to six tables. Every key has a command-line flag of the same name
 (underscores become dashes), and a flag given on the command line overrides the file.
 
 .. code-block:: toml
@@ -27,6 +27,12 @@ A design file has up to five tables. Every key has a command-line flag of the sa
     [simulation]
     nsim = 200000
     seed = 2026
+
+    [adaptation]      # sample size re-estimation at one interim (normal and binary)
+    interim_fraction = 0.5
+    cp_min = 0.36              # promising zone: cp_min <= CP at the observed trend < cp_target
+    cp_target = 0.80
+    max_factor = 2.0           # cap on total patients, as a multiple of the planned maximum
 
     [bayes]           # Bayesian go/no-go interim for a binary endpoint
     pc = 0.30
@@ -70,6 +76,7 @@ SECTIONS: dict[str, frozenset[str]] = {
         {"median_control", "accrual_time", "accrual_rate", "followup", "dropout", "dropout_time"}
     ),
     "simulation": frozenset({"nsim", "seed"}),
+    "adaptation": frozenset({"interim_fraction", "cp_min", "cp_target", "max_factor", "z1"}),
     "bayes": frozenset(
         {
             "pc",
