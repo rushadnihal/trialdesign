@@ -32,7 +32,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
 
-from trialdesign import bayes, fixed
+from trialdesign import accrual, bayes, fixed
 from trialdesign.boundaries import (
     GroupSequentialDesign,
     crossing_probabilities,
@@ -44,6 +44,8 @@ from trialdesign.spending import cumulative_spending
 __all__ = [
     "CONVENTIONAL_ALPHA_ONE_SIDED",
     "SPENDING_NAMES",
+    "accrual_summary",
+    "accrual_text",
     "alpha_note",
     "bayes_markdown",
     "bayes_simulation_summary",
@@ -108,6 +110,7 @@ def fixed_summary(
     method: fixed.NormalMethod = "z",
     delta0: float | None = None,
     hr0: float | None = None,
+    accrual_inputs: Summary | None = None,
 ) -> Summary:
     """Fixed-design sample size (or events) as a flat dictionary.
 
@@ -115,12 +118,23 @@ def fixed_summary(
     ``delta0`` (normal, binary) or ``hr0`` (survival) set the effect under H0 for a
     non-inferiority design; leave them out for superiority. They appear in the summary only
     when given, so superiority output is unchanged.
+
+    For survival, ``accrual_inputs`` holds the keyword arguments of
+    :func:`trialdesign.accrual.survival_study` other than the events and hazard ratio
+    (``median_control`` plus two of ``accrual_time``, ``accrual_rate`` and ``followup``,
+    and optionally ``dropout`` and ``dropout_time``). It turns events into patients and
+    calendar time, in place of a single ``prob_event``.
     """
     common = {"alpha_two_sided": alpha_two_sided, "power": power, "allocation": allocation}
     if endpoint == "survival":
         assert hr is not None
         if delta0 is not None:
             raise ValueError("delta0 is for normal and binary endpoints; use hr0 for survival")
+        if accrual_inputs is not None and prob_event is not None:
+            raise ValueError(
+                "give either prob_event or an accrual model (median_control, accrual and "
+                "follow-up), not both"
+            )
         ev = fixed.events_survival(
             hr, prob_event=prob_event, hazard_ratio0=1.0 if hr0 is None else hr0, **common
         )
@@ -137,6 +151,12 @@ def fixed_summary(
         if ev.n_total is not None:
             out["n_total"] = ev.n_total
             out["n_total_ceil"] = ev.n_total_ceil
+        if accrual_inputs is not None:
+            study = _study(ev.events, hr, allocation, accrual_inputs)
+            out["accrual_inputs"] = dict(accrual_inputs)
+            out["accrual"] = accrual_summary(study)
+            out["n_total"] = study.n_total
+            out["n_total_ceil"] = _ceil(study.n_total)
         return out
     if hr0 is not None:
         raise ValueError("hr0 is for the survival endpoint; use delta0 for normal and binary")
@@ -176,7 +196,63 @@ _INPUT_KEYS = (
     "hazard_ratio",
     "hazard_ratio0",
     "prob_event",
+    "accrual_inputs",
 )
+
+
+def _study(events: float, hr: float, allocation: float, inputs: Summary) -> accrual.SurvivalStudy:
+    return accrual.survival_study(events, hr, allocation=allocation, **inputs)
+
+
+def accrual_summary(
+    study: accrual.SurvivalStudy, info_rates: Sequence[float] | None = None
+) -> Summary:
+    """Accrual, follow-up and calendar times of a :class:`~trialdesign.accrual.SurvivalStudy`.
+
+    With ``info_rates``, also the expected calendar time and patients randomised at each look.
+    Times are in the unit of the inputs (months by convention).
+    """
+    out: Summary = {
+        "n_total": study.n_total,
+        "n_total_ceil": _ceil(study.n_total),
+        "accrual_times": _floats(study.accrual_times),
+        "accrual_rates": _floats(study.accrual_rates),
+        "accrual_duration": study.accrual_duration,
+        "followup": study.followup,
+        "study_duration": study.study_duration,
+        "prob_event": study.prob_event,
+        "hazard_control": study.hazard_control,
+        "dropout_hazard": study.dropout,
+    }
+    if info_rates is not None:
+        times = study.look_times(info_rates)
+        out["look_time"] = _floats(times)
+        out["look_patients"] = [study.patients_at(t) for t in times]
+    return out
+
+
+def accrual_text(s: Summary) -> str:
+    """One sentence on accrual and timing, e.g. for the report and the CLI."""
+    a, inputs = s["accrual"], s["accrual_inputs"]
+    rates = a["accrual_rates"]
+    if len(rates) == 1:
+        pace = f"at {rates[0]:.1f} patients per month for {a['accrual_duration']:.1f} months"
+    else:
+        segs = ", ".join(
+            f"{r:.1f}/month to month {t:.1f}"
+            for r, t in zip(rates, a["accrual_times"], strict=True)
+        )
+        pace = f"with piecewise accrual ({segs})"
+    drop = inputs.get("dropout", 0.0) or 0.0
+    dropout = (
+        f" ({drop:.0%} dropout per {inputs.get('dropout_time', 12.0):g} months)" if drop else ""
+    )
+    return (
+        f"Recruiting {a['n_total_ceil']} patients {pace} and following each for at least "
+        f"{a['followup']:.1f} months{dropout}, with a control median of "
+        f"{inputs['median_control']:g} months, puts the final analysis at month "
+        f"{a['study_duration']:.1f}."
+    )
 
 
 def sequential_summary(fixed_design: Summary, design: GroupSequentialDesign) -> Summary:
@@ -207,7 +283,18 @@ def sequential_summary(fixed_design: Summary, design: GroupSequentialDesign) -> 
         max_unrounded = fixed_design["events"] * infl
         max_total = _ceil(max_unrounded)
         size = {"unit": unit, "max_events": max_unrounded, "max_events_ceil": max_total}
-        if fixed_design.get("prob_event") is not None:
+        if fixed_design.get("accrual_inputs") is not None:
+            study = _study(
+                max_unrounded,
+                fixed_design["hazard_ratio"],
+                fixed_design["allocation"],
+                fixed_design["accrual_inputs"],
+            )
+            acc = accrual_summary(study, design.info_rates)
+            size["accrual"] = acc
+            size["max_n_total"] = acc["n_total"]
+            size["max_n_total_ceil"] = acc["n_total_ceil"]
+        elif fixed_design.get("prob_event") is not None:
             n = max_total / fixed_design["prob_event"]
             size["max_n_total"] = n
             size["max_n_total_ceil"] = _ceil(n)
@@ -496,6 +583,8 @@ def effect_text(s: Summary) -> str:
     text = f"hazard ratio {s['hazard_ratio']:g}"
     if s.get("prob_event") is not None:
         text += f", P(event) {s['prob_event']:g}"
+    if s.get("accrual_inputs") is not None:
+        text += f", control median {s['accrual_inputs']['median_control']:g} months"
     return text
 
 
@@ -533,32 +622,35 @@ def gsd_tables(s: Summary, sim: Summary | None = None, markdown: bool = False) -
     """Tables for a group-sequential summary: boundaries, then operating characteristics."""
     unit = s["sample_size"]["unit"]
     fut = s["futility_z"] or [None] * len(s["looks"])
-    boundaries = format_table(
-        [
-            "Look",
-            "Info fraction",
-            f"Cumulative {unit}",
-            "Efficacy z",
-            "Nominal p (1-sided)",
-            "Cumulative alpha",
-            "Futility z",
-        ],
-        [
-            [k + 1, *row]
-            for k, row in enumerate(
-                zip(
-                    s["looks"],
-                    s["sample_size"]["look_total_ceil"],
-                    s["efficacy_z"],
-                    s["nominal_p_one_sided"],
-                    s["alpha_spent_cumulative"],
-                    fut,
-                    strict=True,
-                )
+    acc = s["sample_size"].get("accrual")
+    headers = [
+        "Look",
+        "Info fraction",
+        f"Cumulative {unit}",
+        "Efficacy z",
+        "Nominal p (1-sided)",
+        "Cumulative alpha",
+        "Futility z",
+    ]
+    rows_b = [
+        [k + 1, *row]
+        for k, row in enumerate(
+            zip(
+                s["looks"],
+                s["sample_size"]["look_total_ceil"],
+                s["efficacy_z"],
+                s["nominal_p_one_sided"],
+                s["alpha_spent_cumulative"],
+                fut,
+                strict=True,
             )
-        ],
-        markdown,
-    )
+        )
+    ]
+    if acc is not None:
+        headers[3:3] = ["Month", "Patients"]
+        for row, t, n in zip(rows_b, acc["look_time"], acc["look_patients"], strict=True):
+            row[3:3] = [f"{t:.1f}", _ceil(n)]
+    boundaries = format_table(headers, rows_b, markdown)
     ex = s["exact"]
     per_look_headers = ["Look", "P(eff) H0", "P(fut) H0", "P(eff) H1", "P(fut) H1"]
     per_look = format_table(
@@ -857,6 +949,8 @@ def gsd_markdown(
     )
     if unit == "events" and "max_n_total_ceil" in size:
         max_line += f", about {size['max_n_total_ceil']} patients"
+    if "accrual" in size:
+        max_line += ". " + accrual_text({"accrual": size["accrual"], **s})[:-1]
     design_rows = [
         ["Endpoint", _ENDPOINT_NAMES[s["endpoint"]]],
         ["Effect", effect_text(s)],

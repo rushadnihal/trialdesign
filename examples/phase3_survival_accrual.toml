@@ -1,0 +1,26 @@
+# Phase 3 time-to-event trial with an accrual model: patients and calendar time from events.
+# Run:  trialdesign design --config examples/phase3_survival_accrual.toml
+#       trialdesign report --config examples/phase3_survival_accrual.toml --out results/
+
+[design]
+endpoint = "survival"
+hr = 0.70                 # hazard ratio, treatment vs control
+allocation = 1.0          # n_T / n_C
+alpha_one_sided = 0.025
+power = 0.80
+
+[accrual]                 # time in months; give two of accrual_time, accrual_rate, followup
+median_control = 12.0     # control-arm median survival
+accrual_time = [6]        # a 6-month ramp-up; the end of the full-speed segment is solved
+accrual_rate = [10, 25]   # patients per month: ramp-up, then full speed
+followup = 12             # minimum follow-up after the last patient enters
+dropout = 0.05            # 5% lost to follow-up per year (dropout_time = 12)
+
+[sequential]
+looks = [0.33, 0.67, 1.0] # information fractions (share of the maximum events)
+efficacy = "obf"
+futility = "pocock"
+
+[simulation]
+nsim = 200000
+seed = 2026
