@@ -67,7 +67,7 @@ def test_integer_looks_are_equally_spaced() -> None:
 @pytest.mark.parametrize(
     ("call", "message"),
     [
-        (lambda: spending.get_spending_function("hsd"), "spending must be one of"),
+        (lambda: spending.get_spending_function("hsd"), "needs a parameter"),
         (lambda: spending.spending_obf(0.5, 0.0), "between 0 and 1"),
         (lambda: spending.spending_pocock(1.5, 0.025), r"lie in \[0, 1\]"),
         (lambda: spending.check_info_rates([0.5, 0.9]), "end at 1.0"),

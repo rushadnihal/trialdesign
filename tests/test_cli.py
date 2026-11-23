@@ -126,7 +126,7 @@ def test_design_group_sequential_table() -> None:
     ("args", "message"),
     [
         (["--looks", "0.5,0.9"], "looks must be positive, increase and end at 1.0"),
-        (["--looks", "3", "--spending", "haybittle"], 'efficacy must be "obf", "pocock"'),
+        (["--looks", "3", "--spending", "haybittle"], 'efficacy: spending must be "obf"'),
         (["--futility", "obf"], "--looks is required for a group-sequential design"),
         (["--alpha-one-sided", "0.025", "--alpha-two-sided", "0.05"], "not both"),
     ],
@@ -137,7 +137,7 @@ def test_design_invalid_sequential_input(args: list[str], message: str) -> None:
     assert message in result.output
 
 
-def test_binding_futility_is_refused(tmp_path: Path) -> None:
+def test_binding_futility_needs_futility(tmp_path: Path) -> None:
     p = tmp_path / "d.toml"
     p.write_text(
         '[design]\nendpoint = "survival"\nhr = 0.7\n'
@@ -145,7 +145,7 @@ def test_binding_futility_is_refused(tmp_path: Path) -> None:
     )
     result = runner.invoke(app, ["design", "--config", str(p)])
     assert result.exit_code == 2
-    assert "binding futility is not supported" in result.output
+    assert "binding futility needs a futility spending" in result.output
 
 
 def test_design_without_endpoint_fails() -> None:

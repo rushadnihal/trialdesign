@@ -7,7 +7,8 @@ package for:
 
 - fixed-design sample size (continuous, binary and time-to-event endpoints), for superiority
   or non-inferiority,
-- Lan-DeMets group-sequential boundaries with non-binding futility,
+- group-sequential boundaries with O'Brien-Fleming-type, Pocock-type, Hwang-Shih-DeCani,
+  Kim-DeMets or user-specified spending, and non-binding (default) or binding futility,
 - promising-zone sample size re-estimation at an interim, with the Cui-Hung-Wang test,
 - survival accrual, follow-up and dropout: patients, study duration and the calendar time of
   each look,
@@ -142,6 +143,31 @@ alpha for this promising-zone rule (0.0244), but not for a rule that adapts in e
 
 ![Re-estimated sample size against the interim z, and power curves](docs/img/ssr.png)
 
+### Spending functions and binding futility
+
+`--efficacy` and `--futility` take any of these, in flags and in `[sequential]`:
+
+| Value | Spending | Cumulative error spent by information fraction t |
+| --- | --- | --- |
+| `obf` | Lan-DeMets O'Brien-Fleming-type | 2 - 2 Phi(z_(1-a/2) / sqrt(t)) |
+| `pocock` | Lan-DeMets Pocock-type | a log(1 + (e - 1) t) |
+| `hsd:<gamma>` | Hwang-Shih-DeCani, e.g. `hsd:-4` | a (1 - exp(-gamma t)) / (1 - exp(-gamma)) |
+| `kd:<rho>` | Kim-DeMets power, e.g. `kd:3` | a t^rho |
+| `user:<f1>,...,1` | User-specified, e.g. `user:0.1,0.4,1` | a times the given fraction at each look |
+
+Futility is non-binding unless you ask otherwise. `--binding-futility` (or
+`binding_futility = true`) solves the efficacy and futility boundaries together, assuming every
+futility stop is made: the efficacy boundaries drop and the trial gets smaller, but alpha holds
+only if the committee always stops. The output then shows how far alpha rises if futility is
+ignored. For the quickstart trial with `--efficacy hsd:-4 --futility hsd:-2`:
+
+| | Max events | Final z | Type I error, futility followed | Type I error, futility ignored |
+| --- | --- | --- | --- | --- |
+| Non-binding | 264 | 1.9996 | 0.0233 | 0.0250 |
+| Binding | 258 | 1.9648 | 0.0250 | 0.0268 |
+
+Binding futility is not available with sample size re-estimation.
+
 ## Command line
 
 | Command | Does |
@@ -168,7 +194,8 @@ d = boundaries.group_sequential_design(
     alpha_one_sided=0.025,
     power=0.80,
     efficacy_spending="obf",
-    futility_spending="obf",  # futility is non-binding
+    futility_spending="obf",  # or "hsd:-2", "kd:2", "user:0.25,0.5,1"
+    binding_futility=False,  # the default
 )
 d.efficacy, d.futility, d.inflation_factor
 d.max_sample_size(fixed.events_survival(0.70).events)  # max events = fixed events x IF
@@ -185,10 +212,11 @@ bayes.calibrate_success_threshold(30, 60, alpha_one_sided=0.025)  # 0.9789
 ```
 
 **Methods in one paragraph.** Every group-sequential design is reduced to a drift on the
-canonical z-scale. Efficacy boundaries spend alpha with Lan-DeMets O'Brien-Fleming-type or
-Pocock-type functions and are solved by Jennison and Turnbull's recursive numerical integration,
-cross-checked against `scipy`'s multivariate normal to 1e-4. Non-binding futility spends beta
-under the alternative. The simulator draws independent increments of the score process, one
+canonical z-scale. Efficacy boundaries spend alpha with any of the spending functions above and
+are solved by Jennison and Turnbull's recursive numerical integration, cross-checked against
+`scipy`'s multivariate normal to 1e-4. Futility spends beta under the alternative; when it is
+binding, efficacy and futility boundaries are solved look by look over the same continuation
+region. The simulator draws independent increments of the score process, one
 `(n_sim, looks)` matrix per batch, so 100,000 trials take well under a second. The Bayesian
 interim computes PPoS exactly by enumerating the beta-binomial posterior predictive, so
 decisions carry no Monte Carlo error and operating characteristics and assurance are exact.
@@ -217,13 +245,16 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Survival accrual: patients, accrual end, follow-up, study duration | `rpact::getSampleSizeSurvival` | 6 | 0.01 patients, 0.001 months |
 | Conditional power at an interim (inverse normal) | `rpact::getConditionalPower` | 5 | 1e-6 |
 | Re-estimation OCs: power, early stopping, expected patients | `rpact::getSimulationMeans` (100,000 runs) | 4 | 3 MC SE |
+| Hwang-Shih-DeCani, Kim-DeMets and user-specified spending: boundaries, inflation factor, expected sample size | `rpact::getDesignGroupSequential` (`asHSD`, `asKD`, `asUser` and beta-spending versions) | 9 | 1e-5 |
+| Binding futility boundaries, inflation factor, expected sample size | `rpact::getDesignGroupSequential(bindingFutility = TRUE)` | 5 | 1e-5 |
 | Calendar time and patients at each look | `rpact::getSampleSizeSurvival` with a group-sequential design | 2 | 0.001 months, 0.05 patients |
 
 Values: [`tests/reference_values.json`](tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
 rpact 5.0.0), [`tests/bayes_reference_values.json`](tests/bayes_reference_values.json) and
 [`tests/ni_reference_values.json`](tests/ni_reference_values.json) and
 [`tests/accrual_reference_values.json`](tests/accrual_reference_values.json) and
-[`tests/ssr_reference_values.json`](tests/ssr_reference_values.json) (rpact 3.4.0).
+[`tests/ssr_reference_values.json`](tests/ssr_reference_values.json) and
+[`tests/spending_reference_values.json`](tests/spending_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -237,6 +268,7 @@ Rscript tests/r/bayes_reference_values.R > bayes.json && mv bayes.json tests/bay
 Rscript tests/r/ni_reference_values.R > ni.json && mv ni.json tests/ni_reference_values.json
 Rscript tests/r/accrual_reference_values.R > acc.json && mv acc.json tests/accrual_reference_values.json
 Rscript tests/r/ssr_reference_values.R > ssr.json && mv ssr.json tests/ssr_reference_values.json
+Rscript tests/r/spending_reference_values.R > sp.json && mv sp.json tests/spending_reference_values.json
 ```
 
 ## Development
@@ -257,7 +289,7 @@ The package is deliberately narrow: two arms and one primary endpoint. Not yet c
 - multiplicity across several endpoints (graphical testing);
 - response-adaptive randomisation;
 - Stan or PyMC models and dynamic borrowing;
-- binding futility and a patient-level time-to-event simulator.
+- a patient-level time-to-event simulator.
 
 ## License
 

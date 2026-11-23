@@ -130,6 +130,8 @@ class SSRDesign:
     def __post_init__(self) -> None:
         if self.gsd.n_looks != 2:
             raise ValueError("sample size re-estimation needs a design with exactly two looks")
+        if self.gsd.binding_futility:
+            raise ValueError("sample size re-estimation supports non-binding futility only")
         if not 0.0 <= self.cp_min < self.cp_target < 1.0:
             raise ValueError("need 0 <= cp_min < cp_target < 1")
         if not self.max_factor >= 1.0:

@@ -21,6 +21,7 @@ import typer
 from trialdesign import __version__, bayes, config, fixed, report, ssr
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
 from trialdesign.simulate import simulate_design
+from trialdesign.spending import parse_spending
 
 app = typer.Typer(
     name="trialdesign",
@@ -133,11 +134,25 @@ LooksOpt = Annotated[
 ]
 EfficacyOpt = Annotated[
     str | None,
-    typer.Option("--efficacy", "--spending", help='Alpha spending: "obf" (default) or "pocock".'),
+    typer.Option(
+        "--efficacy",
+        "--spending",
+        help='Alpha spending: "obf" (default), "pocock", "hsd:<gamma>" (e.g. "hsd:-4"), '
+        '"kd:<rho>" (e.g. "kd:3") or "user:<f1>,...,1" (cumulative fractions of alpha).',
+    ),
 ]
 FutilityOpt = Annotated[
     str | None,
-    typer.Option(help='Non-binding beta spending: "obf", "pocock" or "none" (default).'),
+    typer.Option(help='Beta spending for futility: "none" (default) or any --efficacy choice.'),
+]
+BindingOpt = Annotated[
+    bool | None,
+    typer.Option(
+        "--binding-futility/--non-binding-futility",
+        help="Make futility binding: smaller trial, but alpha holds only if every futility "
+        "stop is made [default: non-binding].",
+        show_default=False,
+    ),
 ]
 NsimOpt = Annotated[int | None, typer.Option(help="Number of simulated trials.")]
 SeedOpt = Annotated[int | None, typer.Option(help="Random seed; drawn and printed if omitted.")]
@@ -256,13 +271,13 @@ def _looks(value: Any) -> int | list[float]:
 
 
 def _spending(value: Any, name: str, allow_none: bool) -> str | None:
-    s = str(value).lower()
+    s = str(value).strip().lower()
     if allow_none and s in ("none", ""):
         return None
-    if s not in ("obf", "pocock"):
-        options = '"obf", "pocock"' + (' or "none"' if allow_none else "")
-        raise ValueError(f"{name} must be {options}, got {value!r}")
-    return s
+    try:
+        return parse_spending(s).label
+    except ValueError as exc:
+        raise ValueError(f"{name}: {exc}") from None
 
 
 def _seed(value: Any) -> int:
@@ -282,6 +297,7 @@ class _DesignInputs:
     looks: int | list[float] | None
     efficacy: str
     futility: str | None
+    binding_futility: bool = False
 
 
 _REQUIRED = {"normal": ("delta", "sd"), "binary": ("pc", "pt"), "survival": ("hr",)}
@@ -342,11 +358,12 @@ def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
     if method not in ("z", "t"):
         raise ValueError('method must be "z" or "t"')
     seq = config.merge(cfg, "sequential", flags)
-    if seq.get("binding_futility"):
-        raise ValueError(
-            "binding futility is not supported: futility boundaries are non-binding, so alpha "
-            "is controlled whether or not they are followed"
-        )
+    binding = seq.get("binding_futility")
+    if binding is not None and not isinstance(binding, bool):
+        raise ValueError("binding_futility must be true or false")
+    futility = _spending(seq.get("futility", "none"), "futility", True)
+    if binding and futility is None:
+        raise ValueError("binding futility needs a futility spending (--futility)")
     looks = seq.get("looks")
     if looks is None and (seq.get("efficacy") is not None or seq.get("futility") is not None):
         raise ValueError("--looks is required for a group-sequential design")
@@ -359,7 +376,8 @@ def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
         method=cast(fixed.NormalMethod, method),
         looks=None if looks is None else _looks(looks),
         efficacy=cast(str, _spending(seq.get("efficacy", "obf"), "efficacy", False)),
-        futility=_spending(seq.get("futility", "none"), "futility", True),
+        futility=futility,
+        binding_futility=bool(binding),
     )
 
 
@@ -382,6 +400,7 @@ def _sequential(inp: _DesignInputs) -> tuple[GroupSequentialDesign, dict[str, An
         power=inp.power,
         efficacy_spending=inp.efficacy,
         futility_spending=inp.futility,
+        binding_futility=inp.binding_futility,
     )
     return gsd, report.sequential_summary(_fixed(inp, 2 * inp.alpha_one_sided), gsd)
 
@@ -514,7 +533,7 @@ def _print_ssr(s: dict[str, Any]) -> None:
             "hypothesis": report.hypothesis_text(planned),
             "alpha_one_sided": planned["alpha_one_sided"],
             "power (planned)": planned["power"],
-            "efficacy": f"Lan-DeMets {report.SPENDING_NAMES[planned['efficacy_spending']]}",
+            "efficacy": report.efficacy_text(planned),
             "futility": report.futility_text(planned),
             "interim_fraction": s["interim_fraction"],
             "patients at interim": s["n_interim"],
@@ -566,7 +585,7 @@ def _print_sequential(s: dict[str, Any], sim: dict[str, Any] | None = None) -> N
         "allocation": s["allocation"],
         "alpha_one_sided": s["alpha_one_sided"],
         "power": s["power"],
-        "efficacy": f"Lan-DeMets {report.SPENDING_NAMES[s['efficacy_spending']]} alpha spending",
+        "efficacy": report.efficacy_text(s),
         "futility": report.futility_text(s),
         f"fixed {unit} (alpha_two_sided {s['fixed']['alpha_two_sided']:g})": size["fixed_total"],
         "inflation_factor": s["inflation_factor"],
@@ -670,6 +689,7 @@ def design(
     looks: LooksOpt = None,
     efficacy: EfficacyOpt = None,
     futility: FutilityOpt = None,
+    binding_futility: BindingOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Sample size and boundaries: a fixed design, or group-sequential with --looks.
@@ -730,15 +750,16 @@ def simulate(
     looks: LooksOpt = None,
     efficacy: EfficacyOpt = None,
     futility: FutilityOpt = None,
+    binding_futility: BindingOpt = None,
     nsim: Annotated[int | None, typer.Option(help="Simulated trials [default: 100000].")] = None,
     seed: SeedOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Monte Carlo operating characteristics of a group-sequential design under H0 and H1.
 
-    Type I error is simulated with futility ignored (non-binding); power and expected sample
-    size follow futility. Every estimate has a Monte Carlo SE and is shown next to its exact
-    value.
+    Type I error is simulated with futility ignored (non-binding) or followed (binding); power
+    and expected sample size follow futility. Every estimate has a Monte Carlo SE and is shown
+    next to its exact value.
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
     try:
@@ -889,6 +910,7 @@ def report_cmd(
     looks: LooksOpt = None,
     efficacy: EfficacyOpt = None,
     futility: FutilityOpt = None,
+    binding_futility: BindingOpt = None,
     n: NOpt = None,
     interim: InterimOpt = None,
     prior_c: PriorCOpt = None,
