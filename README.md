@@ -1,6 +1,7 @@
 # trialdesign
 
-[![CI](https://github.com/rushadnihal/trialdesign-v0.1.0/actions/workflows/ci.yml/badge.svg)](https://github.com/rushadnihal/trialdesign-v0.1.0/actions/workflows/ci.yml)
+[![CI](https://github.com/rushadnihal/trialdesign/actions/workflows/ci.yml/badge.svg)](https://github.com/rushadnihal/trialdesign/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/gsdtrial)](https://pypi.org/project/gsdtrial/)
 
 Design a two-arm clinical trial before the data exist. `trialdesign` is a Python command-line
 package for:
@@ -20,16 +21,21 @@ Every number is checked against R (`rpact`, `gsDesign`, `stats`). See [Validated
 ## Install
 
 ```bash
-pip install git+https://github.com/rushadnihal/trialdesign-v0.1.0
+pip install gsdtrial
 ```
 
-Python 3.11 or later; depends on numpy, scipy, typer and matplotlib.
+The package is published on PyPI as `gsdtrial`, because the name `trialdesign` there belongs to
+an unrelated project. You still `import trialdesign` and run `trialdesign`. That other project
+also installs a `trialdesign` import, so don't install both in the same environment.
+
+Python 3.11 or later; depends on numpy, scipy, typer and matplotlib. For the latest
+development version: `pip install git+https://github.com/rushadnihal/trialdesign`.
 
 ## 30-second quickstart
 
 A phase 3 survival trial with hazard ratio 0.70, 80% power, one-sided alpha 0.025, two interim
 looks, O'Brien-Fleming-type efficacy and Pocock-type non-binding futility
-([`examples/phase3_survival.toml`](examples/phase3_survival.toml)):
+([`examples/phase3_survival.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival.toml)):
 
 ```bash
 trialdesign design --endpoint survival --hr 0.7 --prob-event 0.75 \
@@ -37,7 +43,7 @@ trialdesign design --endpoint survival --hr 0.7 --prob-event 0.75 \
 ```
 
 ```text
-trialdesign 0.1.0 | group-sequential design (output abridged) | alpha is one-sided
+trialdesign 0.2.0 | group-sequential design (output abridged) | alpha is one-sided
   fixed events (alpha_two_sided 0.05)  246.7871
   inflation_factor                     1.2437
   max_events                           307
@@ -57,7 +63,7 @@ trialdesign simulate --config examples/phase3_survival.toml --nsim 200000 --seed
 trialdesign report --config examples/phase3_survival.toml --out results/
 ```
 
-![Efficacy and futility z-boundaries against information fraction](docs/img/boundaries.png)
+![Efficacy and futility z-boundaries against information fraction](https://raw.githubusercontent.com/rushadnihal/trialdesign/main/docs/img/boundaries.png)
 
 Operating characteristics of this design. Exact values come from recursive numerical
 integration; simulated values use 200,000 trials (seed 2026), each with its Monte Carlo SE and
@@ -75,19 +81,21 @@ so alpha is controlled whether or not the data monitoring committee stops. Follo
 cuts the expected number of events under H0 from 307 to 143.
 
 A Bayesian phase 2 interim works the same way
-([`examples/phase2_binary_bayes.toml`](examples/phase2_binary_bayes.toml)):
+([`examples/phase2_binary_bayes.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase2_binary_bayes.toml)):
 
 ```bash
 trialdesign bayes --pc 0.30 --pt 0.45 --n 60 --interim 30 --go 0.9 --nogo 0.1 --xc 6 --xt 12
 ```
 
-[`docs/design_memo.md`](docs/design_memo.md) uses it to design a fictional phase 2 trial, written
-the way it would be presented to a clinical team.
+[`docs/design_memo.md`](https://github.com/rushadnihal/trialdesign/blob/main/docs/design_memo.md)
+uses it to design a fictional phase 2 trial, written the way it would be presented to a
+clinical team, with an addendum that sizes the follow-on phase 3 with sample size
+re-estimation.
 
 For non-inferiority, give the effect under H0: `--delta0` for a difference in means or rates
 (treatment minus control), `--hr0` for a hazard ratio. Here both arms respond at 85% and
 treatment must not be worse by 10 points
-([`examples/phase3_ni_binary.toml`](examples/phase3_ni_binary.toml)):
+([`examples/phase3_ni_binary.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_ni_binary.toml)):
 
 ```bash
 trialdesign design --endpoint binary --pc 0.85 --pt 0.85 --delta0 -0.10   # 207 per arm
@@ -97,7 +105,7 @@ trialdesign design --endpoint survival --hr 1.0 --hr0 1.3 --looks 3       # 504 
 For a survival design, an accrual model turns events into patients and calendar time
 (Lachin-Foulkes, exponential events and dropout, as in `rpact`). Give the control median and
 two of accrual time, accrual rate and follow-up; the third is solved
-([`examples/phase3_survival_accrual.toml`](examples/phase3_survival_accrual.toml)):
+([`examples/phase3_survival_accrual.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_accrual.toml)):
 
 ```bash
 trialdesign design --endpoint survival --hr 0.7 --looks 3 --median-control 12 \
@@ -119,7 +127,7 @@ under H0 uses the Farrington-Manning restricted maximum likelihood rates, as `rp
 `--cp-target`, the second stage grows until it reaches `--cp-target`, up to `--max-factor`
 times the planned maximum. The final test weights the stages by their planned information
 (Cui, Hung and Wang 1999), so alpha is controlled exactly whatever the interim shows
-([`examples/phase3_ssr.toml`](examples/phase3_ssr.toml)):
+([`examples/phase3_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_ssr.toml)):
 
 ```bash
 trialdesign ssr --config examples/phase3_ssr.toml            # zones and exact OCs
@@ -141,7 +149,7 @@ design effect, from 0.500 to 0.548. Pooling all patients in a naive final test w
 alpha for this promising-zone rule (0.0244), but not for a rule that adapts in every zone
 (0.0303 with `--cp-min 0`), which is why the weighted test is always used.
 
-![Re-estimated sample size against the interim z, and power curves](docs/img/ssr.png)
+![Re-estimated sample size against the interim z, and power curves](https://raw.githubusercontent.com/rushadnihal/trialdesign/main/docs/img/ssr.png)
 
 ### Spending functions and binding futility
 
@@ -249,13 +257,13 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Binding futility boundaries, inflation factor, expected sample size | `rpact::getDesignGroupSequential(bindingFutility = TRUE)` | 5 | 1e-5 |
 | Calendar time and patients at each look | `rpact::getSampleSizeSurvival` with a group-sequential design | 2 | 0.001 months, 0.05 patients |
 
-Values: [`tests/reference_values.json`](tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
-rpact 5.0.0), [`tests/bayes_reference_values.json`](tests/bayes_reference_values.json) and
-[`tests/ni_reference_values.json`](tests/ni_reference_values.json) and
-[`tests/accrual_reference_values.json`](tests/accrual_reference_values.json) and
-[`tests/ssr_reference_values.json`](tests/ssr_reference_values.json) and
-[`tests/spending_reference_values.json`](tests/spending_reference_values.json) (rpact 3.4.0).
-Scripts: [`tests/r/`](tests/r/). On top of these, property tests check that one look gives
+Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
+rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/bayes_reference_values.json) and
+[`tests/ni_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ni_reference_values.json) and
+[`tests/accrual_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/accrual_reference_values.json) and
+[`tests/ssr_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_reference_values.json) and
+[`tests/spending_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/spending_reference_values.json) (rpact 3.4.0).
+Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
 lies within a few Monte Carlo SEs of its exact value.
@@ -278,6 +286,10 @@ pip install -e ".[dev]"
 pytest
 ruff check . && ruff format --check .
 ```
+
+Changes are listed in [CHANGELOG.md](https://github.com/rushadnihal/trialdesign/blob/main/CHANGELOG.md).
+Releases are built and published by [`.github/workflows/release.yml`](https://github.com/rushadnihal/trialdesign/blob/main/.github/workflows/release.yml)
+when a `v*` tag is pushed; see [RELEASING.md](https://github.com/rushadnihal/trialdesign/blob/main/RELEASING.md).
 
 ## Future work
 

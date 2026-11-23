@@ -3,12 +3,20 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "trialdesign"
-version = "0.1.0"
-description = "Group-sequential and Bayesian design for two-arm clinical trials"
+name = "gsdtrial"
+version = "0.2.0"
+description = "Group-sequential, adaptive and Bayesian design for two-arm clinical trials"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Rushad Nihal" }]
+keywords = [
+    "clinical trials",
+    "group sequential",
+    "sample size",
+    "alpha spending",
+    "adaptive design",
+    "biostatistics",
+]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -17,6 +25,8 @@ dependencies = [
     "matplotlib>=3.8",
 ]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -31,7 +41,8 @@ dev = ["pytest>=8", "ruff>=0.6"]
 trialdesign = "trialdesign.cli:app"
 
 [project.urls]
-Repository = "https://github.com/rushadnihal/trialdesign-v0.1.0"
+Repository = "https://github.com/rushadnihal/trialdesign"
+Changelog = "https://github.com/rushadnihal/trialdesign/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trialdesign"]

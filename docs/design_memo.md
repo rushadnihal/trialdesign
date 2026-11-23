@@ -1,7 +1,8 @@
 # Design memo: TD-101 phase 2, Bayesian go/no-go interim
 
-*Fictional trial, written to show how `trialdesign` supports a design decision. All numbers
-come from `trialdesign` 0.1.0 and can be reproduced with the commands in the appendix.*
+*Fictional trial, written to show how `trialdesign` supports a design decision. Sections 1 to 5
+were written with `trialdesign` 0.1.0 and the addendum with 0.2.0; version 0.2.0 reproduces
+every number, using the commands in the appendix.*
 
 **To:** TD-101 clinical team · **From:** Trial statistics · **Decision needed:** sample size and
 interim rule for the phase 2 study
@@ -104,6 +105,35 @@ calibrated to a worst-case one-sided false-go rate of 10%. Make the no-go rule b
 charter. If governance requires phase 2 to control one-sided 0.025, the honest alternative is
 design D (180 per arm), not the 60-per-arm default, which is underpowered for this effect.
 
+## Addendum (v0.2): protecting phase 3 against a smaller effect
+
+Section 4 warns that an early go overstates the effect. Phase 3 can be sized on the
+15-point improvement and still guard against a smaller true effect, by re-estimating its
+sample size at the interim (Mehta and Pocock 2011).
+
+**Planned phase 3.** 30% vs 45%, one-sided alpha 0.025, 80% power, an interim at half the
+patients with O'Brien-Fleming-type efficacy and non-binding futility: 344 patients (172 per
+arm), interim at 172. **Rule.** At the interim, compute the conditional power at the observed
+trend. If it is between 0.36 and 0.80 (the promising zone), enrol enough extra patients to
+bring it to 0.80, up to twice the plan (688). Otherwise keep 344. The final analysis weights
+the two stages by their planned sizes (Cui, Hung and Wang 1999), so the type I error stays
+exactly 0.025 (0.0249 in 200,000 simulated trials).
+
+| True improvement | Power, planned | Power, with re-estimation | Mean patients, planned | Mean patients, with re-estimation |
+| --- | --- | --- | --- | --- |
+| 15 points (as designed) | 0.80 | 0.83 | 302 | 336 |
+| about 13 points | 0.66 | 0.71 | 304 | 344 |
+| about 10.5 points | 0.50 | 0.55 | 300 | 342 |
+
+The smaller improvements are 85% and 70% of the design effect on the z-scale. For example, an
+interim z of 1.5 falls in the promising zone: conditional power at the observed trend is 0.59,
+and the rule raises the trial to 518 patients.
+
+**What it buys.** About 4 to 5 points of power for about 40 more patients on average. That is
+cheap insurance if the team believes 15 points but fears 12. If 12 points is the effect phase 3
+must detect, size for it from the start: 528 patients at most, 463 on average under that
+effect, with no adaptive machinery to explain to regulators.
+
 ## Appendix: reproduce every number
 
 ```bash
@@ -119,9 +149,14 @@ trialdesign bayes --pc 0.30 --pt 0.45 --n 180 --interim 90 --design-prior-t 4.5,
 # Full report with plots for design C
 trialdesign report --pc 0.30 --pt 0.45 --n 100 --interim 50 --calibrate --alpha-one-sided 0.10 \
     --design-prior-t 4.5,5.5 --out results/memo
+# Addendum: phase 3 with sample size re-estimation, the rule at z1 = 1.5, and a 12-point design
+trialdesign ssr --endpoint binary --pc 0.30 --pt 0.45 --futility obf --nsim 200000 --seed 2026
+trialdesign ssr --endpoint binary --pc 0.30 --pt 0.45 --futility obf --z1 1.5
+trialdesign design --endpoint binary --pc 0.30 --pt 0.42 --looks 0.5,1 --futility obf
 ```
 
 **References.** Berry, Carlin, Lee and Müller (2010), *Bayesian Adaptive Methods for Clinical
-Trials*. Lee and Liu (2008), *Clinical Trials* 5, 93–106. O'Hagan, Stevens and Campbell (2005),
-*Pharmaceutical Statistics* 4, 187–201. Spiegelhalter, Abrams and Myles (2004), *Bayesian
-Approaches to Clinical Trials and Health-Care Evaluation*.
+Trials*. Cui, Hung and Wang (1999), *Biometrics* 55, 853–857. Lee and Liu (2008), *Clinical
+Trials* 5, 93–106. Mehta and Pocock (2011), *Statistics in Medicine* 30, 3267–3284. O'Hagan,
+Stevens and Campbell (2005), *Pharmaceutical Statistics* 4, 187–201. Spiegelhalter, Abrams and
+Myles (2004), *Bayesian Approaches to Clinical Trials and Health-Care Evaluation*.
