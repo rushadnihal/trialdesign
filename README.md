@@ -8,6 +8,8 @@ package for:
 - fixed-design sample size (continuous, binary and time-to-event endpoints), for superiority
   or non-inferiority,
 - Lan-DeMets group-sequential boundaries with non-binding futility,
+- survival accrual, follow-up and dropout: patients, study duration and the calendar time of
+  each look,
 - a Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance,
 - exact and Monte Carlo operating characteristics, and a Markdown design report.
 
@@ -90,7 +92,21 @@ trialdesign design --endpoint binary --pc 0.85 --pt 0.85 --delta0 -0.10   # 207 
 trialdesign design --endpoint survival --hr 1.0 --hr0 1.3 --looks 3       # 504 events
 ```
 
-The test is one-sided in the direction of the alternative. For a binary endpoint the variance
+For a survival design, an accrual model turns events into patients and calendar time
+(Lachin-Foulkes, exponential events and dropout, as in `rpact`). Give the control median and
+two of accrual time, accrual rate and follow-up; the third is solved
+([`examples/phase3_survival_accrual.toml`](examples/phase3_survival_accrual.toml)):
+
+```bash
+trialdesign design --endpoint survival --hr 0.7 --looks 3 --median-control 12 \
+    --accrual-time 24 --followup 12 --dropout 0.05
+# 250 events, 391 patients; looks expected at months 16.6, 25.1 and 36.0
+```
+
+Piecewise accrual takes one rate per segment, e.g. `--accrual-time 6 --accrual-rate 10,25
+--followup 12` for a 6-month ramp-up (the end of accrual is solved).
+
+The non-inferiority test is one-sided in the direction of the alternative. For a binary endpoint the variance
 under H0 uses the Farrington-Manning restricted maximum likelihood rates, as `rpact` and
 `gsDesign::nBinomial` do.
 
@@ -165,10 +181,13 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Posterior P(p_T > p_C), PPoS, exact OCs, assurance | independent base-R script | 20 | 1e-9 |
 | Non-inferiority sample size and events | `rpact::getSampleSizeMeans`, `getSampleSizeRates`, `getSampleSizeSurvival` (`thetaH0`) | 9 | 1e-4 |
 | Non-inferiority group-sequential maximum | `rpact` with a group-sequential design | 3 | 0.05 |
+| Survival accrual: patients, accrual end, follow-up, study duration | `rpact::getSampleSizeSurvival` | 6 | 0.01 patients, 0.001 months |
+| Calendar time and patients at each look | `rpact::getSampleSizeSurvival` with a group-sequential design | 2 | 0.001 months, 0.05 patients |
 
 Values: [`tests/reference_values.json`](tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
 rpact 5.0.0), [`tests/bayes_reference_values.json`](tests/bayes_reference_values.json) and
-[`tests/ni_reference_values.json`](tests/ni_reference_values.json) (rpact 3.4.0).
+[`tests/ni_reference_values.json`](tests/ni_reference_values.json) and
+[`tests/accrual_reference_values.json`](tests/accrual_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -180,6 +199,7 @@ To regenerate (needs `gsDesign` and `rpact`; the Bayesian script needs base R on
 Rscript tests/r/reference_values.R > ref.json && mv ref.json tests/reference_values.json
 Rscript tests/r/bayes_reference_values.R > bayes.json && mv bayes.json tests/bayes_reference_values.json
 Rscript tests/r/ni_reference_values.R > ni.json && mv ni.json tests/ni_reference_values.json
+Rscript tests/r/accrual_reference_values.R > acc.json && mv acc.json tests/accrual_reference_values.json
 ```
 
 ## Development
