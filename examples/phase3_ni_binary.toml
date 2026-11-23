@@ -1,0 +1,22 @@
+# Phase 3 non-inferiority trial, binary endpoint (higher response is better).
+# Both arms are expected to respond at 85%; treatment must not be worse by 10 points or more.
+# Run:  trialdesign design --config examples/phase3_ni_binary.toml
+#       trialdesign report --config examples/phase3_ni_binary.toml --out results/
+
+[design]
+endpoint = "binary"
+pc = 0.85                 # control response rate
+pt = 0.85                 # treatment response rate under the alternative
+delta0 = -0.10            # H0: p_T - p_C <= -0.10 (non-inferiority margin 0.10)
+allocation = 1.0          # n_T / n_C
+alpha_one_sided = 0.025
+power = 0.80
+
+[sequential]
+looks = [0.5, 1.0]        # one interim at half the information
+efficacy = "obf"          # Lan-DeMets O'Brien-Fleming-type alpha spending
+futility = "obf"          # Lan-DeMets O'Brien-Fleming-type beta spending, non-binding
+
+[simulation]
+nsim = 200000
+seed = 2026

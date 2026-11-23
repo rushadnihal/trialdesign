@@ -55,6 +55,7 @@ __all__ = [
     "futility_text",
     "gsd_markdown",
     "gsd_tables",
+    "hypothesis_text",
     "needs_alpha_note",
     "plot_bayes_oc",
     "plot_boundaries",
@@ -105,19 +106,29 @@ def fixed_summary(
     power: float = 0.80,
     allocation: float = 1.0,
     method: fixed.NormalMethod = "z",
+    delta0: float | None = None,
+    hr0: float | None = None,
 ) -> Summary:
     """Fixed-design sample size (or events) as a flat dictionary.
 
     The endpoint's inputs must already be present; see ``trialdesign design --help``.
+    ``delta0`` (normal, binary) or ``hr0`` (survival) set the effect under H0 for a
+    non-inferiority design; leave them out for superiority. They appear in the summary only
+    when given, so superiority output is unchanged.
     """
     common = {"alpha_two_sided": alpha_two_sided, "power": power, "allocation": allocation}
     if endpoint == "survival":
         assert hr is not None
-        ev = fixed.events_survival(hr, prob_event=prob_event, **common)
+        if delta0 is not None:
+            raise ValueError("delta0 is for normal and binary endpoints; use hr0 for survival")
+        ev = fixed.events_survival(
+            hr, prob_event=prob_event, hazard_ratio0=1.0 if hr0 is None else hr0, **common
+        )
         out: Summary = {
             "endpoint": endpoint,
             "design": "fixed",
             "hazard_ratio": hr,
+            **({} if hr0 is None else {"hazard_ratio0": hr0}),
             "prob_event": prob_event,
             **common,
             "events": ev.events,
@@ -127,16 +138,21 @@ def fixed_summary(
             out["n_total"] = ev.n_total
             out["n_total_ceil"] = ev.n_total_ceil
         return out
+    if hr0 is not None:
+        raise ValueError("hr0 is for the survival endpoint; use delta0 for normal and binary")
+    d0 = 0.0 if delta0 is None else delta0
     if endpoint == "normal":
         assert delta is not None and sd is not None
-        res = fixed.sample_size_normal(delta, sd, method=method, **common)
+        res = fixed.sample_size_normal(delta, sd, method=method, delta0=d0, **common)
         inputs: Summary = {"delta": delta, "sd": sd, "method": method}
     elif endpoint == "binary":
         assert pc is not None and pt is not None
-        res = fixed.sample_size_binary(pc, pt, **common)
+        res = fixed.sample_size_binary(pc, pt, delta0=d0, **common)
         inputs = {"p_control": pc, "p_treatment": pt}
     else:
         raise ValueError(f"unknown endpoint {endpoint!r}")
+    if delta0 is not None:
+        inputs["delta0"] = delta0
     return {
         "endpoint": endpoint,
         "design": "fixed",
@@ -150,7 +166,17 @@ def fixed_summary(
     }
 
 
-_INPUT_KEYS = ("delta", "sd", "method", "p_control", "p_treatment", "hazard_ratio", "prob_event")
+_INPUT_KEYS = (
+    "delta",
+    "sd",
+    "method",
+    "p_control",
+    "p_treatment",
+    "delta0",
+    "hazard_ratio",
+    "hazard_ratio0",
+    "prob_event",
+)
 
 
 def sequential_summary(fixed_design: Summary, design: GroupSequentialDesign) -> Summary:
@@ -471,6 +497,30 @@ def effect_text(s: Summary) -> str:
     if s.get("prob_event") is not None:
         text += f", P(event) {s['prob_event']:g}"
     return text
+
+
+def hypothesis_text(s: Summary) -> str:
+    """The null hypothesis in words, e.g. ``non-inferiority, H0: p_T - p_C <= -0.1``.
+
+    The test is one-sided in the direction of the design alternative. A null effect on the
+    harmful side of no difference is non-inferiority; on the beneficial side it is
+    superiority by a margin.
+    """
+    if s["endpoint"] == "survival":
+        h0 = s.get("hazard_ratio0")
+        if h0 is None or h0 == 1:
+            return "superiority, H0: HR = 1"
+        gap = math.log(s["hazard_ratio"]) - math.log(h0)
+        kind = "non-inferiority" if gap * math.log(h0) < 0 else "superiority by a margin"
+        return f"{kind}, H0: HR {'>=' if gap < 0 else '<='} {h0:g}"
+    d0 = s.get("delta0")
+    name = "mean_T - mean_C" if s["endpoint"] == "normal" else "p_T - p_C"
+    if d0 is None or d0 == 0:
+        return f"superiority, H0: {name} = 0"
+    effect = s["delta"] if s["endpoint"] == "normal" else s["p_treatment"] - s["p_control"]
+    gap = effect - d0
+    kind = "non-inferiority" if gap * d0 < 0 else "superiority by a margin"
+    return f"{kind}, H0: {name} {'<=' if gap > 0 else '>='} {d0:g}"
 
 
 def futility_text(s: Summary) -> str:
@@ -810,6 +860,7 @@ def gsd_markdown(
     design_rows = [
         ["Endpoint", _ENDPOINT_NAMES[s["endpoint"]]],
         ["Effect", effect_text(s)],
+        ["Hypothesis", hypothesis_text(s)],
         ["Allocation (n_T / n_C)", f"{s['allocation']:g}"],
         ["Alpha", f"{s['alpha_one_sided']:g} one-sided"],
         ["Power", f"{s['power']:g}"],
