@@ -76,6 +76,33 @@ Delta0Opt = Annotated[
         "margin of 0.1 when higher is better [default: 0, superiority]."
     ),
 ]
+MedianControlOpt = Annotated[
+    float | None, typer.Option(help="Survival accrual: control-arm median survival (months).")
+]
+AccrualTimeOpt = Annotated[
+    str | None,
+    typer.Option(
+        help='Survival accrual: duration ("24") or end of each segment ("6,24"), in months.'
+    ),
+]
+AccrualRateOpt = Annotated[
+    str | None,
+    typer.Option(help='Survival accrual: patients per month, one per segment ("10,25").'),
+]
+FollowupOpt = Annotated[
+    float | None,
+    typer.Option(
+        help="Survival accrual: minimum follow-up after the last patient enters (months). "
+        "Give two of --accrual-time, --accrual-rate and --followup."
+    ),
+]
+DropoutOpt = Annotated[
+    float | None,
+    typer.Option(help="Survival accrual: share lost to dropout by --dropout-time [default: 0]."),
+]
+DropoutTimeOpt = Annotated[
+    float | None, typer.Option(help="Survival accrual: time for --dropout [default: 12].")
+]
 Hr0Opt = Annotated[
     float | None,
     typer.Option(
@@ -250,6 +277,20 @@ def _resolve_alpha(cfg: config.Config, flags: dict[str, Any]) -> float:
     return 0.025 if one is None else _number(one, "alpha_one_sided")
 
 
+def _accrual_inputs(acc: dict[str, Any]) -> dict[str, Any]:
+    if acc.get("median_control") is None:
+        raise ValueError("--median-control is required for an accrual model")
+    out: dict[str, Any] = {"median_control": _number(acc["median_control"], "median_control")}
+    for key in ("accrual_time", "accrual_rate"):
+        if acc.get(key) is not None:
+            v = _numbers(acc[key], key)
+            out[key] = v[0] if len(v) == 1 else v
+    for key in ("followup", "dropout", "dropout_time"):
+        if acc.get(key) is not None:
+            out[key] = _number(acc[key], key)
+    return out
+
+
 def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
     d = config.merge(cfg, "design", flags)
     if d.get("endpoint") is None:
@@ -263,6 +304,11 @@ def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
     effect: dict[str, Any] = {k: _number(d[k], k) for k in _REQUIRED[endpoint]}
     if endpoint == "survival" and d.get("prob_event") is not None:
         effect["prob_event"] = _number(d["prob_event"], "prob_event")
+    acc = {k: v for k, v in config.merge(cfg, "accrual", flags).items() if v is not None}
+    if acc:
+        if endpoint != "survival":
+            raise ValueError("accrual settings apply only to the survival endpoint")
+        effect["accrual_inputs"] = _accrual_inputs(acc)
     null_key, other = ("hr0", "delta0") if endpoint == "survival" else ("delta0", "hr0")
     if d.get(other) is not None:
         raise ValueError(f"--{other} does not apply to the {endpoint} endpoint; use --{null_key}")
@@ -421,11 +467,15 @@ def _print_sequential(s: dict[str, Any], sim: dict[str, Any] | None = None) -> N
     if unit == "events":
         pairs["max_events"] = size["max_events_ceil"]
         pairs["max_n_total"] = size.get("max_n_total_ceil")
+        if "accrual" in size:
+            pairs["study_duration (months)"] = size["accrual"]["study_duration"]
     else:
         pairs["max_n_control"] = size["max_n_control_ceil"]
         pairs["max_n_treatment"] = size["max_n_treatment_ceil"]
         pairs["max_n_total"] = size["max_n_total_ceil"]
     _print_pairs(pairs)
+    if "accrual" in size:
+        typer.echo(f"\n{report.accrual_text({**s, 'accrual': size['accrual']})}")
     boundaries, oc, per_look = report.gsd_tables(s, sim)
     for title, table in (
         ("Boundaries", boundaries),
@@ -499,6 +549,12 @@ def design(
     delta0: Delta0Opt = None,
     hr0: Hr0Opt = None,
     prob_event: ProbEventOpt = None,
+    median_control: MedianControlOpt = None,
+    accrual_time: AccrualTimeOpt = None,
+    accrual_rate: AccrualRateOpt = None,
+    followup: FollowupOpt = None,
+    dropout: DropoutOpt = None,
+    dropout_time: DropoutTimeOpt = None,
     alpha_one_sided: AlphaOneOpt = None,
     alpha_two_sided: AlphaTwoOpt = None,
     power: PowerOpt = None,
@@ -530,7 +586,12 @@ def design(
         return
     if out["design"] == "fixed":
         typer.echo(f"trialdesign {__version__} | fixed design | alpha is two-sided")
-        _print_pairs({"hypothesis": report.hypothesis_text(out), **out})
+        pairs = {"hypothesis": report.hypothesis_text(out), **out}
+        acc = pairs.pop("accrual", None)
+        pairs.pop("accrual_inputs", None)
+        _print_pairs(pairs)
+        if acc is not None:
+            typer.echo(f"\n{report.accrual_text(out)}")
         return
     typer.echo(f"trialdesign {__version__} | group-sequential design | alpha is one-sided")
     _print_sequential(out)
@@ -548,6 +609,12 @@ def simulate(
     delta0: Delta0Opt = None,
     hr0: Hr0Opt = None,
     prob_event: ProbEventOpt = None,
+    median_control: MedianControlOpt = None,
+    accrual_time: AccrualTimeOpt = None,
+    accrual_rate: AccrualRateOpt = None,
+    followup: FollowupOpt = None,
+    dropout: DropoutOpt = None,
+    dropout_time: DropoutTimeOpt = None,
     alpha_one_sided: AlphaOneOpt = None,
     alpha_two_sided: AlphaTwoOpt = None,
     power: PowerOpt = None,
@@ -647,6 +714,12 @@ def report_cmd(
     delta0: Delta0Opt = None,
     hr0: Hr0Opt = None,
     prob_event: ProbEventOpt = None,
+    median_control: MedianControlOpt = None,
+    accrual_time: AccrualTimeOpt = None,
+    accrual_rate: AccrualRateOpt = None,
+    followup: FollowupOpt = None,
+    dropout: DropoutOpt = None,
+    dropout_time: DropoutTimeOpt = None,
     alpha_one_sided: AlphaOneOpt = None,
     alpha_two_sided: AlphaTwoOpt = None,
     power: PowerOpt = None,

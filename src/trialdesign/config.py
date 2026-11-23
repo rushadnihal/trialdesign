@@ -1,6 +1,6 @@
 """Design files: read a TOML design and merge it with command-line flags.
 
-A design file has up to four tables. Every key has a command-line flag of the same name
+A design file has up to five tables. Every key has a command-line flag of the same name
 (underscores become dashes), and a flag given on the command line overrides the file.
 
 .. code-block:: toml
@@ -17,6 +17,12 @@ A design file has up to four tables. Every key has a command-line flag of the sa
     efficacy = "obf"
     futility = "pocock"
     binding_futility = false
+
+    [accrual]         # survival only: patients and calendar time (months) from events
+    median_control = 12.0
+    accrual_time = 24          # or end times of segments, e.g. [6, 24]
+    followup = 12              # give two of accrual_time, accrual_rate, followup
+    dropout = 0.05             # share lost by dropout_time (default 12, i.e. annual)
 
     [simulation]
     nsim = 200000
@@ -60,6 +66,9 @@ SECTIONS: dict[str, frozenset[str]] = {
         }
     ),
     "sequential": frozenset({"looks", "efficacy", "futility", "binding_futility"}),
+    "accrual": frozenset(
+        {"median_control", "accrual_time", "accrual_rate", "followup", "dropout", "dropout_time"}
+    ),
     "simulation": frozenset({"nsim", "seed"}),
     "bayes": frozenset(
         {
