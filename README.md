@@ -8,6 +8,7 @@ package for:
 - fixed-design sample size (continuous, binary and time-to-event endpoints), for superiority
   or non-inferiority,
 - Lan-DeMets group-sequential boundaries with non-binding futility,
+- promising-zone sample size re-estimation at an interim, with the Cui-Hung-Wang test,
 - survival accrual, follow-up and dropout: patients, study duration and the calendar time of
   each look,
 - a Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance,
@@ -110,6 +111,37 @@ The non-inferiority test is one-sided in the direction of the alternative. For a
 under H0 uses the Farrington-Manning restricted maximum likelihood rates, as `rpact` and
 `gsDesign::nBinomial` do.
 
+### Sample size re-estimation
+
+`trialdesign ssr` plans a two-look design and adds a promising-zone rule (Mehta and Pocock
+2011): if the conditional power at the observed interim trend lies between `--cp-min` and
+`--cp-target`, the second stage grows until it reaches `--cp-target`, up to `--max-factor`
+times the planned maximum. The final test weights the stages by their planned information
+(Cui, Hung and Wang 1999), so alpha is controlled exactly whatever the interim shows
+([`examples/phase3_ssr.toml`](examples/phase3_ssr.toml)):
+
+```bash
+trialdesign ssr --config examples/phase3_ssr.toml            # zones and exact OCs
+trialdesign ssr --config examples/phase3_ssr.toml --z1 1.5   # apply the rule to an interim
+```
+
+```text
+Zone                 Interim z1  Observed / design effect  Total patients
+Unfavourable            < 1.213                   < 0.611             352
+Promising        1.213 to 1.813            0.611 to 0.913      352 to 704
+Favourable       1.813 to 2.963                  >= 0.913             352
+Efficacy (stop)        >= 2.963                                       176
+```
+
+Operating characteristics are exact (one-dimensional integration over the interim z), with a
+simulated check. With these defaults (CP 0.36 to 0.8, cap 2x, interim at half), power at
+the design effect rises from 0.800 to 0.834 for 37 more patients on average; at 70% of the
+design effect, from 0.500 to 0.548. Pooling all patients in a naive final test would also hold
+alpha for this promising-zone rule (0.0244), but not for a rule that adapts in every zone
+(0.0303 with `--cp-min 0`), which is why the weighted test is always used.
+
+![Re-estimated sample size against the interim z, and power curves](docs/img/ssr.png)
+
 ## Command line
 
 | Command | Does |
@@ -117,6 +149,7 @@ under H0 uses the Farrington-Manning restricted maximum likelihood rates, as `rp
 | `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics |
 | `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values |
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
+| `trialdesign ssr` | Promising-zone sample size re-estimation: zones, exact OCs, the rule applied to an interim z |
 | `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics |
 
 Each command takes flags, a TOML design file (`--config`), or both; flags override the file.
@@ -182,12 +215,15 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Non-inferiority sample size and events | `rpact::getSampleSizeMeans`, `getSampleSizeRates`, `getSampleSizeSurvival` (`thetaH0`) | 9 | 1e-4 |
 | Non-inferiority group-sequential maximum | `rpact` with a group-sequential design | 3 | 0.05 |
 | Survival accrual: patients, accrual end, follow-up, study duration | `rpact::getSampleSizeSurvival` | 6 | 0.01 patients, 0.001 months |
+| Conditional power at an interim (inverse normal) | `rpact::getConditionalPower` | 5 | 1e-6 |
+| Re-estimation OCs: power, early stopping, expected patients | `rpact::getSimulationMeans` (100,000 runs) | 4 | 3 MC SE |
 | Calendar time and patients at each look | `rpact::getSampleSizeSurvival` with a group-sequential design | 2 | 0.001 months, 0.05 patients |
 
 Values: [`tests/reference_values.json`](tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
 rpact 5.0.0), [`tests/bayes_reference_values.json`](tests/bayes_reference_values.json) and
 [`tests/ni_reference_values.json`](tests/ni_reference_values.json) and
-[`tests/accrual_reference_values.json`](tests/accrual_reference_values.json) (rpact 3.4.0).
+[`tests/accrual_reference_values.json`](tests/accrual_reference_values.json) and
+[`tests/ssr_reference_values.json`](tests/ssr_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -200,6 +236,7 @@ Rscript tests/r/reference_values.R > ref.json && mv ref.json tests/reference_val
 Rscript tests/r/bayes_reference_values.R > bayes.json && mv bayes.json tests/bayes_reference_values.json
 Rscript tests/r/ni_reference_values.R > ni.json && mv ni.json tests/ni_reference_values.json
 Rscript tests/r/accrual_reference_values.R > acc.json && mv acc.json tests/accrual_reference_values.json
+Rscript tests/r/ssr_reference_values.R > ssr.json && mv ssr.json tests/ssr_reference_values.json
 ```
 
 ## Development
@@ -216,7 +253,7 @@ The package is deliberately narrow: two arms and one primary endpoint. Not yet c
 
 - multi-arm, platform and basket trials;
 - equivalence (two one-sided tests);
-- sample size re-estimation and enrichment designs;
+- blinded or event-driven (survival) sample size re-estimation, and enrichment designs;
 - multiplicity across several endpoints (graphical testing);
 - response-adaptive randomisation;
 - Stan or PyMC models and dynamic borrowing;
