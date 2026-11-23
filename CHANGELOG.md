@@ -2,7 +2,7 @@
 
 All notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-23)
 
 First release on PyPI, as `gsdtrial`. The import (`import trialdesign`) and the command
 (`trialdesign`) keep their names. v0.1 config files and Python calls keep working unchanged.
