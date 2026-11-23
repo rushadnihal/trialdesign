@@ -1,9 +1,12 @@
-"""Group-sequential and Bayesian design for two-arm clinical trials."""
+"""Group-sequential, adaptive and Bayesian design for two-arm clinical trials.
+
+Installed from PyPI as ``gsdtrial``; imported and run as ``trialdesign``.
+"""
 
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("trialdesign")
+    __version__ = version("gsdtrial")
 except PackageNotFoundError:  # running from a source tree without installing
     __version__ = "0.0.0+unknown"
 
