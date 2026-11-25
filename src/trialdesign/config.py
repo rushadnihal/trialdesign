@@ -66,6 +66,7 @@ SECTIONS: dict[str, frozenset[str]] = {
             "hr",
             "delta0",
             "hr0",
+            "margin",
             "prob_event",
             "allocation",
             "alpha_one_sided",
@@ -74,7 +75,7 @@ SECTIONS: dict[str, frozenset[str]] = {
             "method",
         }
     ),
-    "sequential": frozenset({"looks", "efficacy", "futility", "binding_futility"}),
+    "sequential": frozenset({"looks", "efficacy", "futility", "binding_futility", "analyse"}),
     "accrual": frozenset(
         {"median_control", "accrual_time", "accrual_rate", "followup", "dropout", "dropout_time"}
     ),

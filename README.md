@@ -6,8 +6,8 @@
 Design a two-arm clinical trial before the data exist. `trialdesign` is a Python command-line
 package for:
 
-- fixed-design sample size (continuous, binary and time-to-event endpoints), for superiority
-  or non-inferiority,
+- fixed-design sample size (continuous, binary and time-to-event endpoints), for superiority,
+  non-inferiority or equivalence (two one-sided tests),
 - group-sequential boundaries with O'Brien-Fleming-type, Pocock-type, Hwang-Shih-DeCani,
   Kim-DeMets or user-specified spending, and non-binding (default) or binding futility,
 - promising-zone sample size re-estimation at an interim, with the Cui-Hung-Wang test, and
@@ -15,6 +15,8 @@ package for:
 - survival accrual, follow-up and dropout: patients, study duration and the calendar time of
   each look,
 - a Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance,
+- inference at the end of a group-sequential trial: repeated confidence intervals and p-values,
+  and the stage-wise p-value, median-unbiased estimate and confidence interval,
 - exact and Monte Carlo operating characteristics, including a patient-level survival
   simulator (accrual, dropout, event-driven looks, log-rank test), and a Markdown design report.
 
@@ -121,6 +123,52 @@ Piecewise accrual takes one rate per segment, e.g. `--accrual-time 6 --accrual-r
 The non-inferiority test is one-sided in the direction of the alternative. For a binary endpoint the variance
 under H0 uses the Farrington-Manning restricted maximum likelihood rates, as `rpact` and
 `gsDesign::nBinomial` do.
+
+For equivalence, `--margin` gives the margin on the difference T - C, symmetric (`0.1`) or as
+`lower,upper`. Equivalence is concluded when both one-sided tests reject, each at
+`alpha_two_sided / 2`, which is the 1 - alpha_two_sided confidence interval lying inside the
+margins (Schuirmann 1987). Use `--alpha-two-sided 0.1` for the usual 90% interval:
+
+```bash
+trialdesign design --endpoint binary --pc 0.85 --pt 0.85 --margin 0.1 --alpha-two-sided 0.1
+# 225 per arm
+trialdesign design --endpoint normal --delta 0 --sd 1 --margin 0.5 --alpha-two-sided 0.1
+# 69 per arm
+```
+
+Power counts both tests on the same estimate. For a normal endpoint (known SD) it is exact, and
+with a zero true difference the sample size is the closed form with z_(1-beta/2). For a binary
+endpoint each test uses the Farrington-Manning variance at its margin; simulation of the actual
+tests shows the formula is conservative by up to half a point of power. Equivalence designs are
+fixed (no `--looks`).
+
+### Inference at the end of the trial
+
+`--analyse` takes the z-statistics observed so far, one per look, with positive favouring
+treatment, and reports inference that respects the group-sequential design:
+
+```bash
+trialdesign design --endpoint survival --hr 0.7 --looks 3 --analyse 1.2,2.6
+```
+
+```text
+Look    Info       z  Efficacy z  Estimate (HR)   Repeated 95% CI  Repeated p
+1     0.3333  1.2000      3.7103         0.7688  0.3410 to 1.7333      0.3629
+2     0.6667  2.6000      2.5114         0.6684  0.4530 to 0.9864      0.0209
+
+Look 2 (efficacy boundary crossed). Stage-wise ordering: p = 0.004702, median-unbiased HR 0.6685, 95% CI 0.4934 to 0.9059.
+```
+
+Repeated confidence intervals (Jennison and Turnbull 1989) and repeated p-values are valid at
+every look, whether or not the trial stops there. Once a boundary is crossed, or at the last
+look, the stage-wise ordering gives the p-value, the median-unbiased estimate and its confidence
+interval (Tsiatis, Rosner and Mehta 1984). The naive fixed-sample estimate exaggerates the
+effect of a trial that stops early, and the stage-wise estimate corrects for that. Effects are
+mapped from the z-scale with the planned information, so for a hazard ratio they use
+Schoenfeld's D/4. If the looks fell at other information fractions, rebuild the design with
+`--looks` at the observed fractions first. A non-binding futility boundary is ignored, as it is
+for the design's type I error. In Python, `trialdesign.inference.analyse` returns the same
+quantities, and `trialdesign.equivalence` has the TOST functions.
 
 ### Sample size re-estimation
 
@@ -328,6 +376,8 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Log-rank statistic | `scipy.stats.logrank` | 5 | 1e-10 |
 | Patient-level normal (t-test) and binary (Farrington-Manning) simulation, superiority and non-inferiority: power, type I error, per-look stopping, expected sample size | `rpact::getSimulationMeans`, `getSimulationRates` (100,000 runs) | 8 | 3 MC SE |
 | Survival event re-estimation: conditional power given the interim log-rank z | `rpact::getConditionalPower` | 4 | 1e-6 |
+| End-of-trial inference: repeated CIs and p-values, stage-wise p-value, median-unbiased estimate and CI (OBF, Pocock, HSD, Kim-DeMets; non-binding and binding futility) | `rpact::getRepeatedConfidenceIntervals`, `getRepeatedPValues`, `getFinalPValue`, `getFinalConfidenceInterval` | 6 | 1e-3 (agree to about 1e-6) |
+| Equivalence (TOST) sample size and power | closed form at zero difference; simulation of the actual tests | 9 | 1e-4; 3 MC SE (normal), conservative within 1 point (binary) |
 | Survival event re-estimation, patient level: power, type I error, interim stops, expected events, duration and patients | `rpact::getSimulationSurvival` with `conditionalPower` (100,000 runs) | 4 | 3 MC SE |
 
 Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
@@ -338,7 +388,8 @@ rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnih
 [`tests/spending_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/spending_reference_values.json) and
 [`tests/patients_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_reference_values.json) and
 [`tests/patients_endpoints_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_endpoints_reference_values.json) and
-[`tests/ssr_survival_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_survival_reference_values.json) (rpact 3.4.0).
+[`tests/ssr_survival_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_survival_reference_values.json) and
+[`tests/inference_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/inference_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -356,6 +407,7 @@ Rscript tests/r/spending_reference_values.R > sp.json && mv sp.json tests/spendi
 Rscript tests/r/patients_reference_values.R > pat.json && mv pat.json tests/patients_reference_values.json
 Rscript tests/r/patients_endpoints_reference_values.R > pe.json && mv pe.json tests/patients_endpoints_reference_values.json
 Rscript tests/r/ssr_survival_reference_values.R > ssr.json && mv ssr.json tests/ssr_survival_reference_values.json
+Rscript tests/r/inference_reference_values.R > inf.json && mv inf.json tests/inference_reference_values.json
 ```
 
 ## Development
@@ -376,7 +428,7 @@ when a `v*` tag is pushed; see [RELEASING.md](https://github.com/rushadnihal/tri
 The package is deliberately narrow: two arms and one primary endpoint. Not yet covered:
 
 - multi-arm, platform and basket trials;
-- equivalence (two one-sided tests);
+- group-sequential equivalence designs;
 - blinded sample size re-estimation, and enrichment designs;
 - multiplicity across several endpoints (graphical testing);
 - response-adaptive randomisation;

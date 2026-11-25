@@ -10,6 +10,7 @@ prints the package version, so a result can be reproduced.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -18,7 +19,7 @@ from typing import Annotated, Any, cast
 import numpy as np
 import typer
 
-from trialdesign import __version__, accrual, bayes, config, fixed, report, ssr
+from trialdesign import __version__, accrual, bayes, config, fixed, inference, report, ssr
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
 from trialdesign.patients import simulate_design_patients, simulate_survival_ssr
 from trialdesign.simulate import DesignSimulation, simulate_design
@@ -125,6 +126,22 @@ AllocationOpt = Annotated[
 ]
 MethodOpt = Annotated[
     str | None, typer.Option(help='Normal only: "z" (normal approx., default) or "t".')
+]
+MarginOpt = Annotated[
+    str | None,
+    typer.Option(
+        help='Equivalence (fixed normal/binary design): margin on T - C, symmetric ("0.5") or '
+        '"lower,upper" ("-0.4,0.6"). Each one-sided test is at alpha_two_sided / 2; use '
+        "--alpha-two-sided 0.1 for the usual 90% interval."
+    ),
+]
+AnalyseOpt = Annotated[
+    str | None,
+    typer.Option(
+        help='Observed z per look so far, e.g. "1.4,2.3" (positive favours treatment): '
+        "repeated CIs and p-values, and once a boundary is crossed or at the last look the "
+        "stage-wise p-value, median-unbiased estimate and CI. Needs --looks."
+    ),
 ]
 LooksOpt = Annotated[
     str | None,
@@ -370,6 +387,11 @@ def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
         raise ValueError(f"--{other} does not apply to the {endpoint} endpoint; use --{null_key}")
     if d.get(null_key) is not None:
         effect[null_key] = _number(d[null_key], null_key)
+    if d.get("margin") is not None:
+        m = _numbers(d["margin"], "margin")
+        if len(m) not in (1, 2):
+            raise ValueError("margin must be one number or lower,upper")
+        effect["margin"] = m[0] if len(m) == 1 else m
     method = str(d.get("method", "z"))
     if method not in ("z", "t"):
         raise ValueError('method must be "z" or "t"')
@@ -383,6 +405,8 @@ def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
     looks = seq.get("looks")
     if looks is None and (seq.get("efficacy") is not None or seq.get("futility") is not None):
         raise ValueError("--looks is required for a group-sequential design")
+    if looks is not None and "margin" in effect:
+        raise ValueError("equivalence (--margin) is for fixed designs; leave out --looks")
     return _DesignInputs(
         endpoint=endpoint,
         effect=effect,
@@ -419,6 +443,19 @@ def _sequential(inp: _DesignInputs) -> tuple[GroupSequentialDesign, dict[str, An
         binding_futility=inp.binding_futility,
     )
     return gsd, report.sequential_summary(_fixed(inp, 2 * inp.alpha_one_sided), gsd)
+
+
+def _analysis(inp: _DesignInputs, gsd: GroupSequentialDesign, z: list[float]) -> dict[str, Any]:
+    """End-of-trial inference, with effects mapped from the drift at the planned information."""
+    eff = inp.effect
+    if inp.endpoint == "survival":
+        theta1, theta0 = math.log(eff["hr"]), math.log(eff.get("hr0", 1.0))
+    elif inp.endpoint == "normal":
+        theta1, theta0 = eff["delta"], eff.get("delta0", 0.0)
+    else:
+        theta1, theta0 = eff["pt"] - eff["pc"], eff.get("delta0", 0.0)
+    res = inference.analyse(gsd, z, effect_per_drift=(theta1 - theta0) / gsd.drift, theta0=theta0)
+    return report.inference_summary(res, inp.endpoint)
 
 
 def _n_max(s: dict[str, Any]) -> int:
@@ -828,26 +865,34 @@ def design(
     power: PowerOpt = None,
     allocation: AllocationOpt = None,
     method: MethodOpt = None,
+    margin: MarginOpt = None,
     looks: LooksOpt = None,
     efficacy: EfficacyOpt = None,
     futility: FutilityOpt = None,
     binding_futility: BindingOpt = None,
+    analyse: AnalyseOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Sample size and boundaries: a fixed design, or group-sequential with --looks.
 
-    A fixed design reports a two-sided alpha (default 0.05). A group-sequential design uses
-    the one-sided alpha (default 0.025) and inflates the fixed design with the same critical
-    value.
+    A fixed design reports a two-sided alpha (default 0.05); --margin makes it an
+    equivalence design (two one-sided tests). A group-sequential design uses the one-sided
+    alpha (default 0.025) and inflates the fixed design with the same critical value;
+    --analyse adds inference from the observed z-statistics.
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
     try:
         cfg = config.load_config(config_file)
         inp = _resolve_design(cfg, flags)
+        observed = config.merge(cfg, "sequential", flags).get("analyse")
         if inp.looks is None:
+            if observed is not None:
+                raise ValueError("--analyse needs a group-sequential design: give --looks")
             out = _fixed(inp, 2 * inp.alpha_one_sided)
         else:
-            _, out = _sequential(inp)
+            gsd, out = _sequential(inp)
+            if observed is not None:
+                out["analysis"] = _analysis(inp, gsd, _numbers(observed, "analyse"))
     except ValueError as exc:
         raise _fail(exc) from exc
     if as_json:
@@ -864,6 +909,8 @@ def design(
         return
     typer.echo(f"trialdesign {__version__} | group-sequential design | alpha is one-sided")
     _print_sequential(out)
+    if "analysis" in out:
+        typer.echo(f"\nInference from the observed z\n{report.inference_text(out['analysis'])}")
 
 
 @app.command()
