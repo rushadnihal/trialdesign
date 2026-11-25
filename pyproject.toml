@@ -49,7 +49,8 @@ packages = ["src/trialdesign"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not slow'"
+markers = ["slow: long simulation checks, run on demand with `pytest -m slow`"]
 
 [tool.ruff]
 line-length = 100
