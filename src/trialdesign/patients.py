@@ -81,15 +81,19 @@ from trialdesign.simulate import (
     _Tally,
 )
 from trialdesign.spending import check_info_rates
+from trialdesign.ssr import ZONES, SurvivalSSR
 
 __all__ = [
+    "SurvivalSSRSimulation",
     "SurvivalSimulation",
     "entry_times",
+    "logrank_score",
     "logrank_z",
     "simulate_binary",
     "simulate_design_patients",
     "simulate_normal",
     "simulate_survival",
+    "simulate_survival_ssr",
 ]
 
 NormalTest = Literal["t", "z"]
@@ -199,6 +203,20 @@ def logrank_z(
     ----------
     Mantel (1966); Peto and Peto (1972); Jennison & Turnbull (2000), section 13.1.
     """
+    num, var = logrank_score(time, event, treat)
+    return np.divide(num, np.sqrt(var), out=np.zeros(num.size), where=var > 0)
+
+
+def logrank_score(
+    time: NDArray[np.float64], event: NDArray[np.bool_], treat: NDArray
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    r"""Log-rank score :math:`S = \sum_j (d_j n_{Tj}/n_j - e_{Tj})` and its variance :math:`V`.
+
+    Same inputs and conventions as :func:`logrank_z`, which returns :math:`S / \sqrt{V}`.
+    The score has approximately independent increments over calendar time (Tsiatis 1981), so
+    the increment between two analyses, standardised by the increment of :math:`V`, is the
+    stage-2 statistic of an adaptive design.
+    """
     m, n = time.shape
     # sort by time, events before censorings at the same time
     order = _order(time, event)
@@ -211,7 +229,7 @@ def logrank_z(
     p_t = n_t / n_risk
     num = np.where(ev, p_t - tr, 0.0).sum(axis=1)
     var = np.where(ev, p_t * (1.0 - p_t), 0.0).sum(axis=1)
-    return np.divide(num, np.sqrt(var), out=np.zeros(m), where=var > 0)
+    return num, var
 
 
 def _order(time: NDArray, event: NDArray) -> NDArray:
@@ -818,4 +836,195 @@ def simulate_design_patients(
     h0 = h0_ignore if b is None else run(b, False)
     return DesignSimulation(
         design=design, seed=entropy, h0_ignore_futility=h0_ignore, h0=h0, h1=run(b, True)
+    )
+
+
+# ----------------------------------------------------------- survival: event re-estimation
+
+
+@dataclass(frozen=True)
+class SurvivalSSRSimulation:
+    """Patient-level operating characteristics of an event-driven adaptive survival trial.
+
+    Every rate and mean carries its Monte Carlo SE. ``reject_prob_naive`` uses the pooled
+    log-rank statistic at the final analysis instead of the CHW combination, to show the
+    inflation that re-estimating events causes without the weights.
+    """
+
+    hazard_ratio: float
+    n_sim: int
+    seed: int
+    reject_prob: float
+    reject_prob_se: float
+    reject_prob_naive: float
+    reject_prob_naive_se: float
+    prob_zone: dict[str, float]
+    expected_events: float
+    expected_events_se: float
+    expected_duration: float
+    expected_duration_se: float
+    expected_patients: float
+    expected_patients_se: float
+    events_not_reached: float
+
+
+def _cut_at(sorted_cal: NDArray, last: NDArray, k: NDArray) -> NDArray:
+    """Calendar time of the ``k``-th event per trial, or the last observation if never reached."""
+    tau = np.take_along_axis(sorted_cal, (k - 1)[:, None], axis=1)[:, 0]
+    return np.where(np.isfinite(tau), tau, last)
+
+
+def _score_at(
+    tau: NDArray,
+    u: NDArray,
+    t_obs: NDArray,
+    has_event: NDArray,
+    t_event: NDArray,
+    arm: NDArray,
+) -> tuple[NDArray, NDArray]:
+    """Log-rank score and variance of each trial cut at its calendar time ``tau``."""
+    cut = tau[:, None]
+    in_trial = u < cut
+    follow = cut - u
+    time_k = np.where(in_trial, np.minimum(t_obs, follow), -1.0)
+    event_k = in_trial & has_event & (t_event <= follow)
+    return logrank_score(time_k, event_k, arm)
+
+
+def simulate_survival_ssr(
+    adaptive: SurvivalSSR,
+    hazard_ratio: float | None = None,
+    *,
+    use_futility: bool = True,
+    entry: Entry = "fixed",
+    block_multiplier: int = 2,
+    n_sim: int = 10_000,
+    seed: int | None = None,
+) -> SurvivalSSRSimulation:
+    r"""Simulate patients in a survival trial that re-estimates its events at the interim.
+
+    The interim is taken at the calendar time of the :math:`D_1`-th event. Its log-rank
+    statistic :math:`Z_1` decides the zone (:meth:`trialdesign.ssr.SSRDesign.zone`) and, for
+    a continuing trial, the new total :math:`D_2`
+    (:meth:`trialdesign.ssr.SurvivalSSR.total_events`).
+    The final analysis is at the :math:`D_2`-th event, with the stage-2 statistic from the
+    log-rank score increment,
+
+    .. math:: Z_2^\ast = \frac{S(\tau_2) - S(\tau_1)}{\sqrt{V(\tau_2) - V(\tau_1)}}, \qquad
+              Z_{\mathrm{CHW}} = \sqrt{t_1}\,Z_1 + \sqrt{1 - t_1}\,Z_2^\ast,
+
+    rejecting H0 when :math:`Z_{\mathrm{CHW}} \ge c_2`. The naive test compares
+    :math:`S(\tau_2)/\sqrt{V(\tau_2)}` with :math:`c_2`. Only ``extend="followup"`` is
+    simulated: the enrolled patients are followed until the new number of events.
+
+    Parameters
+    ----------
+    adaptive : SurvivalSSR
+        The design, from :func:`trialdesign.ssr.survival_ssr`.
+    hazard_ratio : float, optional
+        True hazard ratio; defaults to the study's design value. Use 1 for the type I error.
+    use_futility : bool
+        Whether interim futility stops are made (ignore them for the type I error of a
+        non-binding design).
+    entry, block_multiplier
+        As for :func:`simulate_survival`.
+    n_sim : int
+        Number of simulated trials.
+    seed : int, optional
+        Seed; if None, fresh entropy is drawn and stored in the result.
+
+    Returns
+    -------
+    SurvivalSSRSimulation
+
+    References
+    ----------
+    Tsiatis (1981); Cui, Hung & Wang (1999); Schäfer and Müller (2001); Wassmer & Brannath
+    (2016), section 4.4.
+    """
+    if adaptive.extend != "followup":
+        raise ValueError('the patient-level simulation supports extend="followup" only')
+    if entry not in ("fixed", "random"):
+        raise ValueError("entry must be 'fixed' or 'random'")
+    _check_n_sim(n_sim)
+    study, d = adaptive.study, adaptive.design
+    hr = study.hazard_ratio if hazard_ratio is None else float(hazard_ratio)
+    if not hr > 0:
+        raise ValueError("hazard_ratio must be positive")
+    n = adaptive.n_total
+    d1, d_max = adaptive.interim_events, adaptive.max_events
+    if d_max > n:
+        raise ValueError(f"the capped {d_max} events cannot come from {n} patients")
+    block = _block(study.allocation, block_multiplier)
+    ss = np.random.SeedSequence(seed)
+    rng = np.random.default_rng(ss)
+    ends = study.accrual_times
+    rates = study.accrual_rates
+    fixed_entry = entry_times(n, ends, rates, "fixed") if entry == "fixed" else None
+    lam_c, eta = study.hazard_control, study.dropout
+    lam_t = hr * lam_c
+    sqrt_t1, sqrt_t2 = math.sqrt(d.t1), math.sqrt(1.0 - d.t1)
+
+    acc = {k: _Moments() for k in ("rej", "naive", "events", "duration", "patients")}
+    zone_counts = {z: 0 for z in ZONES}
+    not_reached = 0
+    chunk = max(1, _CELLS // n)
+    for start in range(0, n_sim, chunk):
+        m = min(chunk, n_sim - start)
+        u = (
+            np.broadcast_to(fixed_entry, (m, n))
+            if fixed_entry is not None
+            else entry_times(n, ends, rates, "random", m, rng)
+        )
+        arm = _arms(n, block, m, rng)
+        lam = np.where(arm == 1, lam_t, lam_c)
+        t_event = rng.exponential(1.0, (m, n)) / lam
+        t_drop = rng.exponential(1.0, (m, n)) / eta if eta > 0 else np.full((m, n), np.inf)
+        has_event = t_event <= t_drop
+        t_obs = np.minimum(t_event, t_drop)
+        cal_event = np.where(has_event, u + t_event, np.inf)
+        sorted_cal = np.sort(cal_event, axis=1)
+        last = np.max(u + t_obs, axis=1)
+
+        tau1 = _cut_at(sorted_cal, last, np.full(m, d1))
+        s1, v1 = _score_at(tau1, u, t_obs, has_event, t_event, arm)
+        z1 = np.divide(s1, np.sqrt(v1), out=np.zeros(m), where=v1 > 0)
+        labels = d.zone(z1, use_futility)
+        for z in ZONES:
+            zone_counts[z] += int(np.sum(labels == z))
+        stop = (labels == "efficacy") | (labels == "futility")
+        d2 = np.where(stop, d1, adaptive.total_events(z1))
+        tau2 = _cut_at(sorted_cal, last, d2)
+        kth = np.take_along_axis(sorted_cal, (d2 - 1)[:, None], axis=1)[:, 0]
+        not_reached += int(np.sum(~np.isfinite(kth)))
+        s2, v2 = _score_at(tau2, u, t_obs, has_event, t_event, arm)
+        dv = v2 - v1
+        z2 = np.divide(s2 - s1, np.sqrt(np.maximum(dv, 0.0)), out=np.zeros(m), where=dv > 0)
+        chw = sqrt_t1 * z1 + sqrt_t2 * z2
+        z_pool = np.divide(s2, np.sqrt(v2), out=np.zeros(m), where=v2 > 0)
+        eff = labels == "efficacy"
+        cont = ~stop
+        acc["rej"].add((eff | (cont & (chw >= d.c2))).astype(float))
+        acc["naive"].add((eff | (cont & (z_pool >= d.c2))).astype(float))
+        acc["events"].add(np.minimum(d2, (cal_event <= tau2[:, None]).sum(axis=1)).astype(float))
+        acc["duration"].add(tau2)
+        acc["patients"].add((u < tau2[:, None]).sum(axis=1).astype(float))
+
+    out = {k: tuple(float(x) for x in v.mean_se()) for k, v in acc.items()}
+    return SurvivalSSRSimulation(
+        hazard_ratio=hr,
+        n_sim=n_sim,
+        seed=int(ss.entropy),
+        reject_prob=out["rej"][0],
+        reject_prob_se=out["rej"][1],
+        reject_prob_naive=out["naive"][0],
+        reject_prob_naive_se=out["naive"][1],
+        prob_zone={z: c / n_sim for z, c in zone_counts.items()},
+        expected_events=out["events"][0],
+        expected_events_se=out["events"][1],
+        expected_duration=out["duration"][0],
+        expected_duration_se=out["duration"][1],
+        expected_patients=out["patients"][0],
+        expected_patients_se=out["patients"][1],
+        events_not_reached=not_reached / n_sim,
     )

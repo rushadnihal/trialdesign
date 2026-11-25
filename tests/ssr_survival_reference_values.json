@@ -1,0 +1,15 @@
+{
+  "_generated_with": "R version 4.3.3 (2024-02-29); rpact 3.4.0",
+  "conditional_power": [
+    {"z1":           1.2, "interim_events": 124, "stage2_events": 150, "hazard_ratio":           0.7, "allocation":             1, "conditional_power": 0.725801654961},
+    {"z1":           0.5, "interim_events": 124, "stage2_events": 248, "hazard_ratio":          0.75, "allocation":             1, "conditional_power": 0.492498827888},
+    {"z1":             2, "interim_events": 200, "stage2_events": 120, "hazard_ratio":           0.8, "allocation":             2, "conditional_power": 0.643672868577},
+    {"z1":          -0.3, "interim_events": 90, "stage2_events": 180, "hazard_ratio":          0.65, "allocation":           0.5, "conditional_power": 0.359608939037}
+  ],
+  "simulation": [
+    {"id": "obf_1to1_hr0.7", "hazard_ratio":           0.7, "design_hazard_ratio":           0.7, "median_control":            12, "allocation":             1, "dropout":             0, "accrual_time":            18, "events": 248, "n_total": 600, "max_factor":           1.5, "efficacy": [2.96258804273, 1.96859564632], "futility": null, "n_sim": 100000, "reject_prob":       0.88816, "reject_interim":       0.15967, "futility_interim":             0, "study_duration": 22.8150104843, "expected_patients": 577.149034681, "expected_events":     274.02326},
+    {"id": "obf_1to1_hr1", "hazard_ratio":             1, "design_hazard_ratio":           0.7, "median_control":            12, "allocation":             1, "dropout":             0, "accrual_time":            18, "events": 248, "n_total": 600, "max_factor":           1.5, "efficacy": [2.96258804273, 1.96859564632], "futility": null, "n_sim": 100000, "reject_prob":       0.02537, "reject_interim":       0.00167, "futility_interim":             0, "study_duration":  26.117780494, "expected_patients": 599.700812412, "expected_events":     365.42083},
+    {"id": "obf_futility_2to1_dropout_hr0.75", "hazard_ratio":          0.75, "design_hazard_ratio":          0.75, "median_control":             9, "allocation":             2, "dropout":          0.05, "accrual_time":            24, "events": 430, "n_total": 1100, "max_factor":          1.75, "efficacy": [2.96258804273, 1.96859564632], "futility": [0.559391495693], "n_sim": 100000, "reject_prob":       0.87218, "reject_interim":       0.19295, "futility_interim":       0.07155, "study_duration": 22.1937549486, "expected_patients":  924.59718046, "expected_events":     453.71025},
+    {"id": "obf_futility_2to1_dropout_hr1", "hazard_ratio":             1, "design_hazard_ratio":          0.75, "median_control":             9, "allocation":             2, "dropout":          0.05, "accrual_time":            24, "events": 430, "n_total": 1100, "max_factor":          1.75, "efficacy": [2.96258804273, 1.96859564632], "futility": [0.559391495693], "n_sim": 100000, "reject_prob":       0.02479, "reject_interim":       0.00222, "futility_interim":       0.71016, "study_duration": 17.1664806193, "expected_patients": 730.009466231, "expected_events":     350.67339}
+  ]
+}
