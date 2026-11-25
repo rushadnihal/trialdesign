@@ -14,7 +14,8 @@ package for:
 - survival accrual, follow-up and dropout: patients, study duration and the calendar time of
   each look,
 - a Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance,
-- exact and Monte Carlo operating characteristics, and a Markdown design report.
+- exact and Monte Carlo operating characteristics, including a patient-level survival
+  simulator (accrual, dropout, event-driven looks, log-rank test), and a Markdown design report.
 
 Every number is checked against R (`rpact`, `gsDesign`, `stats`). See [Validated against](#validated-against).
 
@@ -212,6 +213,12 @@ sim = simulate.simulate_design(d, n_sim=200_000, seed=2026)
 sim.type_i_error, sim.h0_ignore_futility.reject_prob_se  # futility ignored
 sim.power, sim.h1.reject_prob_se
 
+from trialdesign import accrual, patients
+
+study = accrual.survival_study(250, 0.70, 12, accrual_time=24, followup=12)
+ps = patients.simulate_survival(study, d.info_rates, d.efficacy, d.futility, n_sim=10_000, seed=1)
+ps.reject_prob, ps.analysis_time, ps.expected_duration, ps.expected_patients
+
 b = bayes.bayesian_interim_design(n_interim=30, n_final=60)  # control patients per analysis
 b.ppos(6, 12), b.decide(6, 12)  # PPoS and go / no-go / continue at the interim
 b.operating_characteristics(0.30, 0.30).prob_success  # exact type I error
@@ -225,7 +232,11 @@ are solved by Jennison and Turnbull's recursive numerical integration, cross-che
 `scipy`'s multivariate normal to 1e-4. Futility spends beta under the alternative; when it is
 binding, efficacy and futility boundaries are solved look by look over the same continuation
 region. The simulator draws independent increments of the score process, one
-`(n_sim, looks)` matrix per batch, so 100,000 trials take well under a second. The Bayesian
+`(n_sim, looks)` matrix per batch, so 100,000 trials take well under a second. The
+patient-level survival simulator checks that approximation with real patients: piecewise
+accrual, permuted-block randomisation, exponential events and dropout, looks at the calendar
+time of the planned event counts, and the log-rank test, vectorised over trials (10,000 trials
+of 600 patients take a few seconds). The Bayesian
 interim computes PPoS exactly by enumerating the beta-binomial posterior predictive, so
 decisions carry no Monte Carlo error and operating characteristics and assurance are exact.
 The default final success threshold, 0.98, is calibrated so the reference design (30 of 60
@@ -256,13 +267,16 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Hwang-Shih-DeCani, Kim-DeMets and user-specified spending: boundaries, inflation factor, expected sample size | `rpact::getDesignGroupSequential` (`asHSD`, `asKD`, `asUser` and beta-spending versions) | 9 | 1e-5 |
 | Binding futility boundaries, inflation factor, expected sample size | `rpact::getDesignGroupSequential(bindingFutility = TRUE)` | 5 | 1e-5 |
 | Calendar time and patients at each look | `rpact::getSampleSizeSurvival` with a group-sequential design | 2 | 0.001 months, 0.05 patients |
+| Patient-level survival simulation: power, type I error, look times, duration, expected patients and events | `rpact::getSimulationSurvival` (100,000 runs) | 6 | 2 MC SE (power), 3 MC SE (per look, calendar) |
+| Log-rank statistic | `scipy.stats.logrank` | 5 | 1e-10 |
 
 Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
 rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/bayes_reference_values.json) and
 [`tests/ni_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ni_reference_values.json) and
 [`tests/accrual_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/accrual_reference_values.json) and
 [`tests/ssr_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_reference_values.json) and
-[`tests/spending_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/spending_reference_values.json) (rpact 3.4.0).
+[`tests/spending_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/spending_reference_values.json) and
+[`tests/patients_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -277,6 +291,7 @@ Rscript tests/r/ni_reference_values.R > ni.json && mv ni.json tests/ni_reference
 Rscript tests/r/accrual_reference_values.R > acc.json && mv acc.json tests/accrual_reference_values.json
 Rscript tests/r/ssr_reference_values.R > ssr.json && mv ssr.json tests/ssr_reference_values.json
 Rscript tests/r/spending_reference_values.R > sp.json && mv sp.json tests/spending_reference_values.json
+Rscript tests/r/patients_reference_values.R > pat.json && mv pat.json tests/patients_reference_values.json
 ```
 
 ## Development
@@ -284,6 +299,7 @@ Rscript tests/r/spending_reference_values.R > sp.json && mv sp.json tests/spendi
 ```bash
 pip install -e ".[dev]"
 pytest
+pytest -m slow   # on demand: 100,000-trial type I error check of the patient-level simulator
 ruff check . && ruff format --check .
 ```
 
@@ -301,7 +317,7 @@ The package is deliberately narrow: two arms and one primary endpoint. Not yet c
 - multiplicity across several endpoints (graphical testing);
 - response-adaptive randomisation;
 - Stan or PyMC models and dynamic borrowing;
-- a patient-level time-to-event simulator.
+- non-proportional hazards and non-exponential event times in the patient-level simulator.
 
 ## License
 
