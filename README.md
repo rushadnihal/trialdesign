@@ -47,7 +47,7 @@ trialdesign design --endpoint survival --hr 0.7 --prob-event 0.75 \
 ```
 
 ```text
-trialdesign 0.2.0 | group-sequential design (output abridged) | alpha is one-sided
+trialdesign 0.3.0 | group-sequential design (output abridged) | alpha is one-sided
   fixed events (alpha_two_sided 0.05)  246.7871
   inflation_factor                     1.2437
   max_events                           307
@@ -162,8 +162,11 @@ Look 2 (efficacy boundary crossed). Stage-wise ordering: p = 0.004702, median-un
 Repeated confidence intervals (Jennison and Turnbull 1989) and repeated p-values are valid at
 every look, whether or not the trial stops there. Once a boundary is crossed, or at the last
 look, the stage-wise ordering gives the p-value, the median-unbiased estimate and its confidence
-interval (Tsiatis, Rosner and Mehta 1984). The naive fixed-sample estimate exaggerates the
-effect of a trial that stops early, and the stage-wise estimate corrects for that. Effects are
+interval (Tsiatis, Rosner and Mehta 1984). These account for the looks already taken: the
+estimate is median-unbiased over all the ways the trial could have stopped, and the p-value and
+interval keep their error rates, which the fixed-sample ones do not. With O'Brien-Fleming-type
+boundaries the difference is often small (in the example the naive and stage-wise values are
+close), and at the first look the two coincide; it grows with Pocock-type boundaries. Effects are
 mapped from the z-scale with the planned information, so for a hazard ratio they use
 Schoenfeld's D/4. If the looks fell at other information fractions, rebuild the design with
 `--looks` at the observed fractions first. A non-binding futility boundary is ignored, as it is
@@ -228,7 +231,8 @@ Binding futility is not available with sample size re-estimation.
 
 #### Survival: re-estimating the number of events
 
-For a time-to-event endpoint, `trialdesign ssr` re-estimates the number of events instead.
+For a time-to-event endpoint, `trialdesign ssr` re-estimates the number of events instead
+([`examples/phase3_survival_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_ssr.toml)).
 The interim is at half the planned events and the cap (`--max-factor`, default 1.5 for
 survival) applies to total events. The stage-2 statistic is the log-rank score increment
 between the two analyses, which has independent increments (Tsiatis 1981), so the same
@@ -270,11 +274,11 @@ patient-level check is the better guide.
 
 | Command | Does |
 | --- | --- |
-| `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics |
+| `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics; `--margin` for equivalence, `--analyse` for inference from observed z |
 | `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test |
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
 | `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z |
-| `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics |
+| `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics; `--engine patient` adds a patient-level check, `--analyse` an inference section |
 
 Each command takes flags, a TOML design file (`--config`), or both; flags override the file.
 Output is a plain table, or JSON with `--json`. Only `report --out` writes to disk, and every
@@ -293,6 +297,13 @@ shows how far the large-sample theory holds for your design:
 trialdesign simulate --endpoint survival --hr 0.7 --median-control 12 --accrual-time 24 \
   --followup 12 --looks 3 --engine patient --seed 1
 ```
+
+For the phase 3 binary design of the
+[design memo](https://github.com/rushadnihal/trialdesign/blob/main/docs/design_memo.md), 100,000
+patient-level trials give a one-sided type I error of 0.0266 (MC SE 0.0005) rather than 0.025:
+the z-test is slightly liberal at 172 patients. `report --nsim N --engine patient` keeps the
+score-engine simulation of N trials and adds 10,000 patient-level trials beside it, with the
+exact values, in a "Patient-level check" table.
 
 ## Python API
 
