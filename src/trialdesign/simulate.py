@@ -16,9 +16,8 @@ A trial stops at the first look k with :math:`Z_k \ge c_k` (efficacy) or :math:`
 (futility). Every rate is reported with its Monte Carlo standard error
 :math:`\sqrt{p(1 - p) / n_{\mathrm{sim}}}`.
 
-:func:`simulate_binary` is a patient-level check for a binary endpoint: it draws binomial
-counts per arm and look and uses the pooled-variance z-test, so it shows how far the normal
-approximation behind the boundaries holds at small sample sizes.
+Patient-level simulators for all three endpoints are in :mod:`trialdesign.patients`;
+:func:`simulate_binary` stays here as a thin wrapper so v0.2 code keeps working.
 
 References
 ----------
@@ -409,66 +408,13 @@ def simulate_binary(
     n_sim: int = 100_000,
     seed: SeedLike = None,
 ) -> OperatingCharacteristics:
-    r"""Patient-level simulation of a two-arm binary trial with group-sequential looks.
+    """Patient-level binary simulation; kept here for v0.2 code.
 
-    At look k each arm has :math:`n_{ik} = \operatorname{round}(t_k n_i)` patients, with
-    binomial successes drawn per look increment. The test statistic is the pooled-variance
-    z-test (the score test behind ``prop.test`` without continuity correction),
-
-    .. math:: Z_k = \frac{\hat p_{T} - \hat p_{C}}
-              {\sqrt{\bar p (1 - \bar p)\,(1/n_{Ck} + 1/n_{Tk})}},
-
-    set to 0 when :math:`\bar p \in \{0, 1\}`. Positive z favours treatment.
-
-    Parameters
-    ----------
-    p_control, p_treatment : float
-        True response probabilities.
-    n_control : int
-        Maximum number of control patients; treatment gets ``round(allocation * n_control)``.
-    info_rates, efficacy, futility
-        As for :func:`simulate_trials`. Looks are placed by sample size, so the information
-        fractions hold only approximately.
-    allocation : float
-        Ratio :math:`n_T / n_C`.
-    n_sim : int
-        Number of simulated trials.
-    seed : int, numpy.random.SeedSequence, numpy.random.Generator or None
-        Seed or generator.
-
-    Returns
-    -------
-    OperatingCharacteristics
-        With ``drift=None``; ``expected_info_fraction`` is the planned fraction at the stop.
-
-    References
-    ----------
-    Jennison & Turnbull (2000), section 3.1 (binary responses as an approximately canonical
-    process); Fleiss, Levin and Paik (2003), *Statistical Methods for Rates and Proportions*,
-    section 4.2.
+    Moved to :func:`trialdesign.patients.simulate_binary`, which also takes ``delta0``
+    (non-inferiority) and ``n_treatment``.
     """
-    for p, name in ((p_control, "p_control"), (p_treatment, "p_treatment")):
-        if not 0.0 <= p <= 1.0:
-            raise ValueError(f"{name} must lie in [0, 1]")
-    if not allocation > 0:
-        raise ValueError("allocation must be positive")
-    t = check_info_rates(info_rates)
-    c, b = _check_bounds(t, efficacy, futility)
-    _check_n_sim(n_sim)
-    n_c = np.rint(t * n_control).astype(np.int64)
-    n_t = np.rint(t * round(allocation * n_control)).astype(np.int64)
-    if n_c[0] < 1 or n_t[0] < 1 or np.any(np.diff(n_c) < 1) or np.any(np.diff(n_t) < 1):
-        raise ValueError("each look needs at least one new patient per arm")
-    inc_c, inc_t = np.diff(n_c, prepend=0), np.diff(n_t, prepend=0)
-    rng = _rng(seed)
-    tally = _Tally(t, c, b)
-    for start in range(0, n_sim, _CHUNK):
-        m = min(_CHUNK, n_sim - start)
-        x_c = np.cumsum(rng.binomial(inc_c, p_control, size=(m, t.size)), axis=1)
-        x_t = np.cumsum(rng.binomial(inc_t, p_treatment, size=(m, t.size)), axis=1)
-        p_bar = (x_c + x_t) / (n_c + n_t)
-        var = p_bar * (1.0 - p_bar) * (1.0 / n_c + 1.0 / n_t)
-        diff = x_t / n_t - x_c / n_c
-        z = np.divide(diff, np.sqrt(var), out=np.zeros_like(diff), where=var > 0)
-        tally.add(z)
-    return tally.result(None, futility is not None)
+    from trialdesign.patients import simulate_binary as _simulate_binary
+
+    return _simulate_binary(
+        p_control, p_treatment, n_control, info_rates, efficacy, futility, allocation, n_sim, seed
+    )
