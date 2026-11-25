@@ -1,4 +1,4 @@
-r"""Patient-level simulation of event-driven survival trials with group-sequential looks.
+r"""Patient-level simulation of group-sequential trials: survival, normal and binary endpoints.
 
 The score-process engine in :mod:`trialdesign.simulate` draws the z-statistics directly from
 their asymptotic joint distribution. This module simulates the patients instead, so it checks
@@ -6,7 +6,13 @@ how far that approximation holds with real accrual, dropout and a log-rank test,
 the calendar quantities that only patients have: when each look happens, how many patients
 are enrolled by then, and how long the study runs.
 
-Each simulated trial:
+Normal and binary endpoints (:func:`simulate_normal`, :func:`simulate_binary`) draw each
+arm's sufficient statistics per look increment and test with the estimated variance;
+:func:`simulate_design_patients` runs any endpoint under H0 and H1, like
+:func:`trialdesign.simulate.simulate_design`. The rest of this docstring describes the
+survival simulator.
+
+Each simulated survival trial:
 
 1. enrols ``n_total`` patients over the accrual period of a
    :class:`~trialdesign.accrual.SurvivalStudy` (piecewise-constant intensity), either at
@@ -61,10 +67,14 @@ from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy import stats
 
 from trialdesign.accrual import SurvivalStudy
+from trialdesign.boundaries import GroupSequentialDesign
 from trialdesign.simulate import (
+    DesignSimulation,
     OperatingCharacteristics,
+    SeedLike,
     _check_bounds,
     _check_n_sim,
     _rng,
@@ -76,8 +86,14 @@ __all__ = [
     "SurvivalSimulation",
     "entry_times",
     "logrank_z",
+    "simulate_binary",
+    "simulate_design_patients",
+    "simulate_normal",
     "simulate_survival",
 ]
+
+NormalTest = Literal["t", "z"]
+_CHUNK = 250_000  # trials per batch for the normal and binary engines
 
 Entry = Literal["fixed", "random"]
 
@@ -452,4 +468,354 @@ def simulate_survival(
         expected_events_se=float(ev_se),
         events_not_reached=not_reached / n_sim,
         seed=int(ss.entropy),
+    )
+
+
+# ------------------------------------------------------------------ normal and binary
+
+
+def _look_counts(t: NDArray, n_control: int, n_treatment: int) -> tuple[NDArray, NDArray]:
+    n_c = np.rint(t * n_control).astype(np.int64)
+    n_t = np.rint(t * n_treatment).astype(np.int64)
+    if n_c[0] < 1 or n_t[0] < 1 or np.any(np.diff(n_c) < 1) or np.any(np.diff(n_t) < 1):
+        raise ValueError("each look needs at least one new patient per arm")
+    return n_c, n_t
+
+
+def _n_treatment(n_control: int, n_treatment: int | None, allocation: float) -> int:
+    if not allocation > 0:
+        raise ValueError("allocation must be positive")
+    return round(allocation * n_control) if n_treatment is None else int(n_treatment)
+
+
+def _arm_moments(
+    rng: np.random.Generator, m: int, inc: NDArray, mean: float, sd: float
+) -> tuple[NDArray, NDArray]:
+    """Cumulative sums and sums of squares about the mean, per look, for one arm."""
+    xbar = rng.normal(mean, sd / np.sqrt(inc), (m, inc.size))  # stage means
+    ss = sd * sd * rng.chisquare(np.maximum(inc - 1, 1), (m, inc.size))
+    ss = np.where(inc > 1, ss, 0.0)  # within-stage sum of squares
+    n = np.cumsum(inc)
+    total = np.cumsum(inc * xbar, axis=1)
+    ss_cum = np.cumsum(ss + inc * xbar * xbar, axis=1) - total * total / n
+    return total / n, np.maximum(ss_cum, 0.0)
+
+
+def simulate_normal(
+    delta: float,
+    sd: float,
+    n_control: int,
+    info_rates: int | Sequence[float],
+    efficacy: Sequence[float],
+    futility: Sequence[float] | None = None,
+    *,
+    allocation: float = 1.0,
+    n_treatment: int | None = None,
+    delta0: float = 0.0,
+    test: NormalTest = "t",
+    n_sim: int = 100_000,
+    seed: SeedLike = None,
+) -> OperatingCharacteristics:
+    r"""Patient-level simulation of a two-arm normal trial with group-sequential looks.
+
+    Each arm's stage mean and within-stage sum of squares are drawn from their exact
+    distributions (:math:`N(\mu, \sigma^2/m)` and :math:`\sigma^2\chi^2_{m-1}`, independent),
+    which is the same as drawing every patient. At look k, with the pooled variance
+    :math:`s_k^2` on :math:`n_{Ck} + n_{Tk} - 2` degrees of freedom,
+
+    .. math:: T_k = \frac{\bar x_{Tk} - \bar x_{Ck} - \delta_0}
+              {s_k \sqrt{1/n_{Ck} + 1/n_{Tk}}}.
+
+    With ``test="t"`` the boundaries are applied to :math:`Z_k = \Phi^{-1}(F_{t,\nu}(T_k))`,
+    the z-value with the same one-sided p-value (``rpact``'s ``normalApproximation = FALSE``);
+    with ``test="z"``, to :math:`T_k` itself.
+
+    Parameters
+    ----------
+    delta : float
+        True difference :math:`\mu_T - \mu_C`.
+    sd : float
+        True common standard deviation.
+    n_control : int
+        Maximum control patients; treatment gets ``n_treatment`` or
+        ``round(allocation * n_control)``.
+    info_rates, efficacy, futility
+        As for :func:`trialdesign.simulate.simulate_trials`. Look k has
+        ``round(t_k * n)`` patients per arm.
+    allocation : float
+        Ratio :math:`n_T / n_C`.
+    n_treatment : int, optional
+        Maximum treatment patients, overriding ``allocation``.
+    delta0 : float
+        Difference under H0 (negative for non-inferiority); 0 for superiority.
+    test : {"t", "z"}
+        Reference distribution of the statistic, see above.
+    n_sim : int
+        Number of simulated trials.
+    seed : int, numpy.random.SeedSequence, numpy.random.Generator or None
+        Seed or generator.
+
+    Returns
+    -------
+    OperatingCharacteristics
+        With ``drift=None``.
+
+    References
+    ----------
+    Jennison & Turnbull (2000), sections 3.1 and 3.4 (unknown variance); Wassmer & Brannath
+    (2016), section 3.3.
+    """
+    if not sd > 0:
+        raise ValueError("sd must be positive")
+    if test not in ("t", "z"):
+        raise ValueError("test must be 't' or 'z'")
+    t = check_info_rates(info_rates)
+    c, b = _check_bounds(t, efficacy, futility)
+    _check_n_sim(n_sim)
+    n_t_max = _n_treatment(n_control, n_treatment, allocation)
+    n_c, n_t = _look_counts(t, n_control, n_t_max)
+    if n_c[0] + n_t[0] < 3:
+        raise ValueError("the first look needs at least 3 patients to estimate the variance")
+    inc_c, inc_t = np.diff(n_c, prepend=0), np.diff(n_t, prepend=0)
+    df = n_c + n_t - 2
+    rng = _rng(seed)
+    tally = _Tally(t, c, b)
+    for start in range(0, n_sim, _CHUNK):
+        m = min(_CHUNK, n_sim - start)
+        mean_c, ss_c = _arm_moments(rng, m, inc_c, 0.0, sd)
+        mean_t, ss_t = _arm_moments(rng, m, inc_t, delta, sd)
+        s = np.sqrt((ss_c + ss_t) / df)
+        stat = (mean_t - mean_c - delta0) / (s * np.sqrt(1.0 / n_c + 1.0 / n_t))
+        z = stats.norm.isf(stats.t.sf(stat, df)) if test == "t" else stat
+        tally.add(z)
+    return tally.result(None, futility is not None)
+
+
+def _fm_rates_vec(pc: NDArray, pt: NDArray, r: NDArray, d: float) -> tuple[NDArray, NDArray]:
+    """Vectorised :func:`trialdesign.fixed.farrington_manning_rates`."""
+    if d == 0.0:
+        p_bar = (pc + r * pt) / (1 + r)
+        return p_bar, p_bar
+    p1, p2, theta = pt, pc, 1.0 / r
+    a = 1.0 + theta
+    b_ = -(1.0 + theta + p1 + theta * p2 + d * (theta + 2.0))
+    c_ = d * d + d * (2.0 * p1 + theta + 1.0) + p1 + theta * p2
+    e = -p1 * d * (1.0 + d)
+    v = b_**3 / (27 * a**3) - b_ * c_ / (6 * a**2) + e / (2 * a)
+    u = np.copysign(np.sqrt(np.maximum(b_ * b_ / (9 * a * a) - c_ / (3 * a), 0.0)), v)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(u == 0.0, 0.0, np.clip(v / u**3, -1.0, 1.0))
+    w = (np.pi + np.arccos(ratio)) / 3.0
+    p1_tilde = 2.0 * u * np.cos(w) - b_ / (3.0 * a)
+    return p1_tilde - d, p1_tilde
+
+
+def simulate_binary(
+    p_control: float,
+    p_treatment: float,
+    n_control: int,
+    info_rates: int | Sequence[float],
+    efficacy: Sequence[float],
+    futility: Sequence[float] | None = None,
+    allocation: float = 1.0,
+    n_sim: int = 100_000,
+    seed: SeedLike = None,
+    *,
+    n_treatment: int | None = None,
+    delta0: float = 0.0,
+) -> OperatingCharacteristics:
+    r"""Patient-level simulation of a two-arm binary trial with group-sequential looks.
+
+    At look k each arm has :math:`n_{ik} = \operatorname{round}(t_k n_i)` patients, with
+    binomial successes drawn per look increment. The statistic uses the variance at the
+    rates that maximise the likelihood under H0 (Farrington and Manning 1990):
+
+    .. math:: Z_k = \frac{\hat p_{T} - \hat p_{C} - \delta_0}
+              {\sqrt{\tilde p_C (1 - \tilde p_C)/n_{Ck} + \tilde p_T (1 - \tilde p_T)/n_{Tk}}},
+
+    which for superiority (:math:`\delta_0 = 0`) is the pooled-variance score test behind
+    ``prop.test`` without continuity correction. Z is set to 0 when the variance is 0.
+    Positive z favours treatment.
+
+    Parameters
+    ----------
+    p_control, p_treatment : float
+        True response probabilities.
+    n_control : int
+        Maximum number of control patients; treatment gets ``n_treatment`` or
+        ``round(allocation * n_control)``.
+    info_rates, efficacy, futility
+        As for :func:`trialdesign.simulate.simulate_trials`. Looks are placed by sample size,
+        so the information fractions hold only approximately.
+    allocation : float
+        Ratio :math:`n_T / n_C`.
+    n_sim : int
+        Number of simulated trials.
+    seed : int, numpy.random.SeedSequence, numpy.random.Generator or None
+        Seed or generator.
+    n_treatment : int, optional
+        Maximum treatment patients, overriding ``allocation``.
+    delta0 : float
+        Difference :math:`p_T - p_C` under H0 (negative for non-inferiority).
+
+    Returns
+    -------
+    OperatingCharacteristics
+        With ``drift=None``; ``expected_info_fraction`` is the planned fraction at the stop.
+
+    References
+    ----------
+    Jennison & Turnbull (2000), section 3.1; Farrington, C. P. and Manning, G. (1990). Test
+    statistics and sample size formulae for comparative binomial trials with null hypothesis
+    of non-zero risk difference or non-unity relative risk. *Statistics in Medicine* 9,
+    1447-1454.
+    """
+    for p, name in ((p_control, "p_control"), (p_treatment, "p_treatment")):
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"{name} must lie in [0, 1]")
+    if not -1.0 < delta0 < 1.0:
+        raise ValueError("delta0 must be between -1 and 1")
+    t = check_info_rates(info_rates)
+    c, b = _check_bounds(t, efficacy, futility)
+    _check_n_sim(n_sim)
+    n_t_max = _n_treatment(n_control, n_treatment, allocation)
+    n_c, n_t = _look_counts(t, n_control, n_t_max)
+    inc_c, inc_t = np.diff(n_c, prepend=0), np.diff(n_t, prepend=0)
+    r = n_t / n_c
+    rng = _rng(seed)
+    tally = _Tally(t, c, b)
+    for start in range(0, n_sim, _CHUNK):
+        m = min(_CHUNK, n_sim - start)
+        x_c = np.cumsum(rng.binomial(inc_c, p_control, size=(m, t.size)), axis=1)
+        x_t = np.cumsum(rng.binomial(inc_t, p_treatment, size=(m, t.size)), axis=1)
+        ph_c, ph_t = x_c / n_c, x_t / n_t
+        pc0, pt0 = _fm_rates_vec(ph_c, ph_t, r, delta0)
+        var = pc0 * (1.0 - pc0) / n_c + pt0 * (1.0 - pt0) / n_t
+        diff = ph_t - ph_c - delta0
+        z = np.divide(diff, np.sqrt(np.maximum(var, 0.0)), out=np.zeros_like(diff), where=var > 0)
+        tally.add(z)
+    return tally.result(None, futility is not None)
+
+
+# ------------------------------------------------------------------------ whole design
+
+
+def simulate_design_patients(
+    design: GroupSequentialDesign,
+    endpoint: Literal["normal", "binary", "survival"],
+    *,
+    n_control: int | None = None,
+    n_treatment: int | None = None,
+    delta: float | None = None,
+    sd: float | None = None,
+    p_control: float | None = None,
+    p_treatment: float | None = None,
+    delta0: float = 0.0,
+    test: NormalTest = "t",
+    study: SurvivalStudy | None = None,
+    n_total: int | None = None,
+    events: int | None = None,
+    n_sim: int = 10_000,
+    seed: int | None = None,
+) -> DesignSimulation:
+    """Patient-level operating characteristics of a design under H0 and H1.
+
+    The patient-level counterpart of :func:`trialdesign.simulate.simulate_design`, with the
+    same three scenarios: H0 with futility ignored (the type I error of a non-binding
+    design), H0 with futility followed, and H1 with futility followed. H0 sits on its
+    boundary: the treatment effect equals ``delta0`` (normal, binary) or HR = 1 (survival).
+    All three scenarios start from the same seed.
+
+    Parameters
+    ----------
+    design : GroupSequentialDesign
+        Boundaries to apply.
+    endpoint : {"normal", "binary", "survival"}
+        Which simulator to run.
+    n_control, n_treatment : int
+        Maximum patients per arm (normal, binary).
+    delta, sd : float
+        Design difference and standard deviation (normal).
+    p_control, p_treatment : float
+        Design response rates (binary).
+    delta0 : float
+        Difference under H0 (normal, binary).
+    test : {"t", "z"}
+        Reference distribution for the normal statistic.
+    study : SurvivalStudy
+        Accrual and event model (survival); its hazard ratio is the H1 value.
+    n_total, events : int, optional
+        Patients and final events (survival); default to the study's, rounded up.
+    n_sim : int
+        Simulated trials per scenario.
+    seed : int, optional
+        Seed; if None, fresh entropy is drawn and stored in the result.
+
+    Returns
+    -------
+    DesignSimulation
+    """
+    ss = np.random.SeedSequence(seed)
+    entropy = int(ss.entropy)
+    t, c, b = design.info_rates, design.efficacy, design.futility
+
+    def run(futility: NDArray | None, h1: bool) -> OperatingCharacteristics:
+        rng_seed = np.random.SeedSequence(entropy)
+        if endpoint == "normal":
+            if n_control is None or delta is None or sd is None:
+                raise ValueError("the normal endpoint needs n_control, delta and sd")
+            return simulate_normal(
+                delta if h1 else delta0,
+                sd,
+                n_control,
+                t,
+                c,
+                futility,
+                n_treatment=n_treatment,
+                delta0=delta0,
+                test=test,
+                n_sim=n_sim,
+                seed=rng_seed,
+            )
+        if endpoint == "binary":
+            if n_control is None or p_control is None or p_treatment is None:
+                raise ValueError("the binary endpoint needs n_control, p_control and p_treatment")
+            p_t = p_treatment if h1 else p_control + delta0
+            if not 0.0 <= p_t <= 1.0:
+                raise ValueError("p_control + delta0 must lie in [0, 1]")
+            return simulate_binary(
+                p_control,
+                p_t,
+                n_control,
+                t,
+                c,
+                futility,
+                n_sim=n_sim,
+                seed=rng_seed,
+                n_treatment=n_treatment,
+                delta0=delta0,
+            )
+        if endpoint == "survival":
+            if study is None:
+                raise ValueError(
+                    "the patient-level survival simulator needs an accrual model "
+                    "(median control, accrual and follow-up)"
+                )
+            return simulate_survival(
+                study,
+                t,
+                c,
+                futility,
+                hazard_ratio=None if h1 else 1.0,
+                n_total=n_total,
+                events=events,
+                n_sim=n_sim,
+                seed=int(rng_seed.generate_state(1)[0]),
+            ).oc
+        raise ValueError(f'endpoint must be "normal", "binary" or "survival", got {endpoint!r}')
+
+    h0_ignore = run(None, False)
+    h0 = h0_ignore if b is None else run(b, False)
+    return DesignSimulation(
+        design=design, seed=entropy, h0_ignore_futility=h0_ignore, h0=h0, h1=run(b, True)
     )

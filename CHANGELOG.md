@@ -11,7 +11,21 @@ All notable changes to this project. Versions follow [Semantic Versioning](https
   dropout, looks at the calendar time of the planned event counts, and the log-rank test.
   Reports power or type I error, mean look times, study duration, and expected patients and
   events, each with a Monte Carlo SE. Validated against `rpact::getSimulationSurvival`.
+- **Patient-level normal and binary simulators** (`trialdesign.patients.simulate_normal`,
+  `simulate_binary`), with non-inferiority margins (`delta0`). Normal: t-test with the pooled
+  variance, turned into the z-value with the same p-value (`test="t"`, default) or compared
+  with the boundaries as is (`test="z"`). Binary: z-test with the Farrington-Manning variance
+  under H0. Validated against `rpact::getSimulationMeans` and `getSimulationRates`.
+- `trialdesign.patients.simulate_design_patients`: H0 and H1 patient-level operating
+  characteristics of a design, the counterpart of `simulate.simulate_design`.
+- `trialdesign simulate --engine patient` (or `engine = "patient"` under `[simulation]`),
+  default 10,000 trials. The `score` engine stays the default and its output is unchanged.
 - A `slow` pytest marker for long simulation checks, run on demand with `pytest -m slow`.
+
+### Changed
+
+- `simulate.simulate_binary` moved to `patients.simulate_binary`; the old name still works
+  and gives the same numbers.
 
 ## 0.2.0 (2026-11-23)
 

@@ -182,7 +182,7 @@ Binding futility is not available with sample size re-estimation.
 | Command | Does |
 | --- | --- |
 | `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics |
-| `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values |
+| `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test |
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
 | `trialdesign ssr` | Promising-zone sample size re-estimation: zones, exact OCs, the rule applied to an interim z |
 | `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics |
@@ -192,6 +192,18 @@ Output is a plain table, or JSON with `--json`. Only `report --out` writes to di
 simulation prints its seed and the package version. Alpha always names its sidedness: fixed
 designs report two-sided alpha (default 0.05), group-sequential designs one-sided (default
 0.025). Run `trialdesign COMMAND --help` for every option.
+
+`simulate` has two engines. The default, `score`, draws the canonical z-scale process: fast,
+and exactly what the boundaries assume. `--engine patient` (or `engine = "patient"` under
+`[simulation]`) simulates patients and the test you would run on them: the t-test for a
+normal endpoint, the Farrington-Manning z-test for a binary one (including non-inferiority),
+and the log-rank test with accrual and dropout for survival. It defaults to 10,000 trials and
+shows how far the large-sample theory holds for your design:
+
+```bash
+trialdesign simulate --endpoint survival --hr 0.7 --median-control 12 --accrual-time 24 \
+  --followup 12 --looks 3 --engine patient --seed 1
+```
 
 ## Python API
 
@@ -218,6 +230,10 @@ from trialdesign import accrual, patients
 study = accrual.survival_study(250, 0.70, 12, accrual_time=24, followup=12)
 ps = patients.simulate_survival(study, d.info_rates, d.efficacy, d.futility, n_sim=10_000, seed=1)
 ps.reject_prob, ps.analysis_time, ps.expected_duration, ps.expected_patients
+pd = patients.simulate_design_patients(  # H0 and H1, like simulate.simulate_design
+    d, "binary", n_control=180, p_control=0.30, p_treatment=0.45, n_sim=10_000, seed=1
+)
+pd.type_i_error, pd.power
 
 b = bayes.bayesian_interim_design(n_interim=30, n_final=60)  # control patients per analysis
 b.ppos(6, 12), b.decide(6, 12)  # PPoS and go / no-go / continue at the interim
@@ -269,6 +285,7 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Calendar time and patients at each look | `rpact::getSampleSizeSurvival` with a group-sequential design | 2 | 0.001 months, 0.05 patients |
 | Patient-level survival simulation: power, type I error, look times, duration, expected patients and events | `rpact::getSimulationSurvival` (100,000 runs) | 6 | 2 MC SE (power), 3 MC SE (per look, calendar) |
 | Log-rank statistic | `scipy.stats.logrank` | 5 | 1e-10 |
+| Patient-level normal (t-test) and binary (Farrington-Manning) simulation, superiority and non-inferiority: power, type I error, per-look stopping, expected sample size | `rpact::getSimulationMeans`, `getSimulationRates` (100,000 runs) | 8 | 3 MC SE |
 
 Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
 rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/bayes_reference_values.json) and
@@ -276,7 +293,8 @@ rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnih
 [`tests/accrual_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/accrual_reference_values.json) and
 [`tests/ssr_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_reference_values.json) and
 [`tests/spending_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/spending_reference_values.json) and
-[`tests/patients_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_reference_values.json) (rpact 3.4.0).
+[`tests/patients_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_reference_values.json) and
+[`tests/patients_endpoints_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_endpoints_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -292,6 +310,7 @@ Rscript tests/r/accrual_reference_values.R > acc.json && mv acc.json tests/accru
 Rscript tests/r/ssr_reference_values.R > ssr.json && mv ssr.json tests/ssr_reference_values.json
 Rscript tests/r/spending_reference_values.R > sp.json && mv sp.json tests/spending_reference_values.json
 Rscript tests/r/patients_reference_values.R > pat.json && mv pat.json tests/patients_reference_values.json
+Rscript tests/r/patients_endpoints_reference_values.R > pe.json && mv pe.json tests/patients_endpoints_reference_values.json
 ```
 
 ## Development
