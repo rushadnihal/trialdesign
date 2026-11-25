@@ -134,6 +134,25 @@ cheap insurance if the team believes 15 points but fears 12. If 12 points is the
 must detect, size for it from the start: 528 patients at most, 463 on average under that
 effect, with no adaptive machinery to explain to regulators.
 
+## Addendum (v0.3): checking the phase 3 design with simulated patients, and reporting it
+
+**Does the design hold with real patients?** The boundaries above assume the canonical normal
+z-process. The patient-level engine instead randomises 344 patients, draws responses, and
+applies the Farrington-Manning z-test at each look (100,000 trials). Power holds (0.809 against
+the planned 0.800), but the one-sided type I error is 0.0266 (MC SE 0.0005), not 0.025: with 86
+patients per arm at the interim the z-test is slightly liberal at a 30% response rate. If the
+protocol must hold 0.025 exactly, plan at one-sided 0.0235 (350 patients): the simulated type I
+error is then 0.0243 and the power 0.804.
+
+**Reporting the result.** The statistical analysis plan should name the analysis that matches
+the design, not the fixed-sample one. Suppose the interim z is 1.4 (continue) and the final z
+is 2.3. Stage-wise ordering gives a one-sided p-value of 0.0115 (the naive p is 0.0107), a
+median-unbiased improvement of 11.9 points and a 95% confidence interval of 1.7 to 22.2 points.
+With O'Brien-Fleming-type boundaries these are close to the naive values (12.0 points, 1.8 to
+22.2), because almost no alpha is spent at the interim. Had the trial stopped at the interim, the
+repeated confidence interval at that look would have been the one to quote, and it is wide (for
+z = 3.1: 1.0 to 44.7 points).
+
 ## Appendix: reproduce every number
 
 ```bash
@@ -153,10 +172,19 @@ trialdesign report --pc 0.30 --pt 0.45 --n 100 --interim 50 --calibrate --alpha-
 trialdesign ssr --endpoint binary --pc 0.30 --pt 0.45 --futility obf --nsim 200000 --seed 2026
 trialdesign ssr --endpoint binary --pc 0.30 --pt 0.45 --futility obf --z1 1.5
 trialdesign design --endpoint binary --pc 0.30 --pt 0.42 --looks 0.5,1 --futility obf
+# Addendum v0.3: patient-level check, the 0.0235 design, and the end-of-trial analysis
+trialdesign simulate --endpoint binary --pc 0.30 --pt 0.45 --looks 0.5,1 --futility obf \
+    --engine patient --nsim 100000 --seed 2026
+trialdesign simulate --endpoint binary --pc 0.30 --pt 0.45 --looks 0.5,1 --futility obf \
+    --engine patient --nsim 100000 --seed 2026 --alpha-one-sided 0.0235
+trialdesign design --endpoint binary --pc 0.30 --pt 0.45 --looks 0.5,1 --futility obf \
+    --analyse 1.4,2.3
 ```
 
 **References.** Berry, Carlin, Lee and Müller (2010), *Bayesian Adaptive Methods for Clinical
 Trials*. Cui, Hung and Wang (1999), *Biometrics* 55, 853–857. Lee and Liu (2008), *Clinical
 Trials* 5, 93–106. Mehta and Pocock (2011), *Statistics in Medicine* 30, 3267–3284. O'Hagan,
-Stevens and Campbell (2005), *Pharmaceutical Statistics* 4, 187–201. Spiegelhalter, Abrams and
-Myles (2004), *Bayesian Approaches to Clinical Trials and Health-Care Evaluation*.
+Stevens and Campbell (2005), *Pharmaceutical Statistics* 4, 187–201. Jennison and Turnbull
+(1989), *JRSS B* 51, 305–361. Tsiatis, Rosner and Mehta (1984), *Biometrics* 40, 797–803.
+Spiegelhalter, Abrams and Myles (2004), *Bayesian Approaches to Clinical Trials and Health-Care
+Evaluation*.

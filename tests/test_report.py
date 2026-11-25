@@ -84,3 +84,68 @@ def test_bayes_summary_needs_both_interim_counts() -> None:
 def test_write_report_needs_a_design(tmp_path) -> None:
     with pytest.raises(ValueError, match="nothing to report"):
         report.write_report(tmp_path, "0")
+
+
+# --------------------------------------------------------------------------- v0.3 sections
+
+
+def test_cli_report_patient_engine_and_analysis(tmp_path) -> None:
+    import json
+
+    from typer.testing import CliRunner
+
+    from trialdesign.cli import app
+
+    runner = CliRunner()
+    args = ["report", "--endpoint", "binary", "--pc", "0.3", "--pt", "0.45", "--looks", "0.5,1"]
+    args += ["--futility", "obf", "--nsim", "20000", "--seed", "4", "--engine", "patient"]
+    args += ["--analyse", "1.4,2.3"]
+    result = runner.invoke(app, [*args, "--out", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    md = (tmp_path / "report.md").read_text()
+    assert "### Patient-level check" in md and "Farrington-Manning z-test" in md
+    assert "| Quantity | Exact | Score sim | MC SE | Patient sim | MC SE |" in md
+    assert "## Inference from the observed results" in md and "Stage-wise ordering" in md
+    assert "Tsiatis, A. A., Rosner, G. L. and Mehta" in md
+    result = runner.invoke(app, [*args, "--json"])
+    payload = json.loads(result.output)
+    assert payload["simulation_patient"]["nsim"] == 10_000
+    assert payload["simulation"]["nsim"] == 20_000
+    assert payload["analysis"]["p_value"] == pytest.approx(0.01149, abs=1e-4)
+    result = runner.invoke(app, [*args[:9], "--engine", "patient"])
+    assert result.exit_code == 2 and "needs --nsim" in result.output
+
+
+def test_engine_table_flags_a_patient_engine_gap() -> None:
+    _, _, s = _gsd(delta=0.5, sd=1.0)
+    ex = s["exact"]
+
+    def sim(t1: float) -> dict:
+        oc = {"reject": t1, "reject_se": 0.001, "expected_total": 100.0, "expected_total_se": 1.0}
+        return {
+            "type_i_error": t1,
+            "type_i_error_se": 0.001,
+            "power": ex["power"],
+            "power_se": 0.004,
+            "h0": {**oc, "expected_total": ex["expected_total_h0"]},
+            "h1": {**oc, "expected_total": ex["expected_total_h1"]},
+            "h0_ignore_futility": oc,
+        }
+
+    table = report.engine_table(s, sim(0.025), sim(0.030))
+    first = table.splitlines()[1]
+    assert first.startswith("Type I error") and first.rstrip().endswith("*")
+
+
+def test_survival_ssr_example_config() -> None:
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from trialdesign.cli import app
+
+    cfg = str(Path(__file__).parent.parent / "examples" / "phase3_survival_ssr.toml")
+    result = CliRunner().invoke(app, ["ssr", "--config", cfg, "--z1", "1.2"])
+    assert result.exit_code == 0, result.output
+    assert "extra events from            accrual" in result.output
+    assert "Total events" in result.output

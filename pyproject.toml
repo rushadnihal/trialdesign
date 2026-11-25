@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gsdtrial"
-version = "0.2.0"
+version = "0.3.0"
 description = "Group-sequential, adaptive and Bayesian design for two-arm clinical trials"
 readme = "README.md"
 license = { file = "LICENSE" }

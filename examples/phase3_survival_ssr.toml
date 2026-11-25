@@ -1,0 +1,27 @@
+# Phase 3 time-to-event trial that re-estimates its number of events at the halfway look.
+# Run:  trialdesign ssr --config examples/phase3_survival_ssr.toml
+#       trialdesign ssr --config examples/phase3_survival_ssr.toml --z1 1.2   # apply the rule
+#       trialdesign report --config examples/phase3_survival_ssr.toml --out results/
+
+[design]
+endpoint = "survival"
+hr = 0.70                 # hazard ratio the trial is powered for
+alpha_one_sided = 0.025
+power = 0.80
+
+[accrual]                 # time in months
+median_control = 12.0
+accrual_time = 18
+followup = 12
+
+[sequential]
+efficacy = "obf"          # looks are [interim_fraction, 1.0], in events
+
+[adaptation]
+interim_fraction = 0.5
+cp_min = 0.36             # promising zone: cp_min <= CP at the observed trend < cp_target
+cp_target = 0.80
+max_factor = 1.5          # cap on total events: 1.5 times the planned events
+extend = "accrual"        # enrol more patients for the extra events; "followup" waits longer
+# The patient-level check (--nsim) simulates extend = "followup" only: it follows the planned
+# patients, which here would take until about month 69 to reach the capped events.
