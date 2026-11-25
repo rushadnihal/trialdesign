@@ -2,6 +2,17 @@
 
 All notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Patient-level survival simulator** (`trialdesign.patients.simulate_survival`): piecewise
+  accrual (evenly spaced or random entry), permuted-block randomisation, exponential events and
+  dropout, looks at the calendar time of the planned event counts, and the log-rank test.
+  Reports power or type I error, mean look times, study duration, and expected patients and
+  events, each with a Monte Carlo SE. Validated against `rpact::getSimulationSurvival`.
+- A `slow` pytest marker for long simulation checks, run on demand with `pytest -m slow`.
+
 ## 0.2.0 (2026-11-23)
 
 First release on PyPI, as `gsdtrial`. The import (`import trialdesign`) and the command
