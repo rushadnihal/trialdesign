@@ -458,6 +458,9 @@ def _analysis(inp: _DesignInputs, gsd: GroupSequentialDesign, z: list[float]) ->
     return report.inference_summary(res, inp.endpoint)
 
 
+_PATIENT_NSIM = 10_000  # patient-level trials in a report, next to the score engine's nsim
+
+
 def _n_max(s: dict[str, Any]) -> int:
     size = s["sample_size"]
     return size["max_events_ceil"] if size["unit"] == "events" else size["max_n_total_ceil"]
@@ -1137,16 +1140,19 @@ def report_cmd(
     max_factor: MaxFactorOpt = None,
     extend: ExtendOpt = None,
     z1: Z1Opt = None,
+    analyse: AnalyseOpt = None,
     nsim: NsimOpt = None,
     seed: SeedOpt = None,
+    engine: EngineOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Markdown design report with PNG plots of boundaries and operating characteristics.
 
     Reports the group-sequential design ([design] and [sequential], or --endpoint and
     --looks) and the Bayesian interim ([bayes], or --n and --interim), whichever are given.
-    Simulated checks are added when --nsim or [simulation] is set. Nothing is written to
-    disk without --out.
+    Simulated checks are added when --nsim or [simulation] is set; with --engine patient,
+    10,000 patient-level trials are shown next to the score-engine simulation. --analyse adds
+    inference from observed z-statistics. Nothing is written to disk without --out.
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json", "out")}
     try:
@@ -1159,6 +1165,7 @@ def report_cmd(
             )
         n_sim, seed_used = _simulation_settings(cfg, flags, None)
         gsd_part = bayes_part = ssr_part = None
+        patient_sim = analysis = None
         adapt = _resolve_adaptation(cfg, flags, required=False) if want_gsd else None
         if adapt is not None:
             ssr_d, ssr_s = _ssr_run(cfg, flags, adapt, n_sim, seed_used)
@@ -1169,9 +1176,19 @@ def report_cmd(
                 raise ValueError("the report needs a group-sequential design: give --looks")
             gsd, s = _sequential(inp)
             sim = None
+            patient_engine = _engine(cfg, flags) == "patient"
+            if patient_engine and n_sim is None:
+                raise ValueError("the patient engine needs --nsim (or nsim under [simulation])")
             if n_sim is not None:
                 sim = report.simulation_summary(simulate_design(gsd, n_sim, seed_used), _n_max(s))
+                if patient_engine:
+                    patient_sim = report.simulation_summary(
+                        _patient_simulation(inp, gsd, s, _PATIENT_NSIM, seed_used), _n_max(s)
+                    )
             gsd_part = (gsd, s, sim)
+            observed = config.merge(cfg, "sequential", flags).get("analyse")
+            if observed is not None:
+                analysis = _analysis(inp, gsd, _numbers(observed, "analyse"))
         if want_bayes:
             bd, extra = _resolve_bayes(cfg, flags)
             bayes_part = (bd, *_bayes_run(bd, extra, n_sim, seed_used))
@@ -1185,6 +1202,8 @@ def report_cmd(
                 gsd=gsd_part,
                 bayes_design=bayes_part,
                 ssr_design=ssr_part,
+                patient=patient_sim,
+                analysis=analysis,
             )
     except ValueError as exc:
         raise _fail(exc) from exc
@@ -1192,6 +1211,10 @@ def report_cmd(
         payload: dict[str, Any] = {"files": [str(f) for f in files], "seed": seed_used}
         if gsd_part is not None:
             payload["design"], payload["simulation"] = gsd_part[1], gsd_part[2]
+            if patient_sim is not None:
+                payload["simulation_patient"] = patient_sim
+            if analysis is not None:
+                payload["analysis"] = analysis
         if bayes_part is not None:
             payload["bayes"], payload["bayes_simulation"] = bayes_part[1], bayes_part[2]
         if ssr_part is not None:
@@ -1207,7 +1230,11 @@ def report_cmd(
     seed_text = f", seed {seed_used}" if seed_used is not None else ""
     typer.echo(f"<!-- trialdesign {__version__}{seed_text}; add --out DIR for the plots -->\n")
     if gsd_part is not None:
-        typer.echo(report.gsd_markdown(gsd_part[1], gsd_part[2], plots=False) + "\n")
+        typer.echo(
+            report.gsd_markdown(gsd_part[1], gsd_part[2], plots=False, patient=patient_sim) + "\n"
+        )
+        if analysis is not None:
+            typer.echo(report.inference_markdown(analysis) + "\n")
     if ssr_part is not None:
         typer.echo(report.ssr_markdown(ssr_part[1], plots=False) + "\n")
     if bayes_part is not None:

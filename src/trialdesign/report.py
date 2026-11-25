@@ -52,12 +52,14 @@ __all__ = [
     "bayes_summary",
     "bayes_tables",
     "effect_text",
+    "engine_table",
     "fixed_summary",
     "format_table",
     "futility_text",
     "gsd_markdown",
     "gsd_tables",
     "hypothesis_text",
+    "inference_markdown",
     "inference_summary",
     "inference_text",
     "needs_alpha_note",
@@ -324,7 +326,7 @@ def inference_summary(res: inference.GroupSequentialInference, endpoint: str) ->
     }
 
 
-def inference_text(s: Summary) -> str:
+def inference_text(s: Summary, markdown: bool = False) -> str:
     """The per-look table and the final line of an inference summary."""
     name = "HR" if s["effect"] == "hazard_ratio" else "T - C"
     pct = f"{100 * s['level']:g}%"
@@ -351,6 +353,7 @@ def inference_text(s: Summary) -> str:
             "Repeated p",
         ],
         rows,
+        markdown,
     )
     if s["p_value"] is None:
         last = (
@@ -366,6 +369,25 @@ def inference_text(s: Summary) -> str:
             f"{s['ci_lower']:.4f} to {s['ci_upper']:.4f}."
         )
     return f"{table}\n\n{last}"
+
+
+def inference_markdown(s: Summary) -> str:
+    """Markdown section for end-of-trial inference from observed z-statistics."""
+    name = "hazard ratio" if s["effect"] == "hazard_ratio" else "difference T - C"
+    return "\n\n".join(
+        [
+            "## Inference from the observed results",
+            f"Observed z-statistics at {s['stage']} look(s), with the {name} mapped from the "
+            "z-scale at the planned information. Repeated confidence intervals and p-values "
+            "(Jennison and Turnbull 1989) are valid at every look, whatever the stopping rule. "
+            "Once a boundary is crossed, or at the last look, the stage-wise ordering gives "
+            "the p-value, the median-unbiased estimate and its confidence interval (Tsiatis, "
+            "Rosner and Mehta 1984). Unlike the fixed-sample ones, they account for the looks "
+            "already taken: the estimate is median-unbiased over every way the trial could "
+            "have stopped, and the p-value and interval keep their error rates.",
+            inference_text(s, markdown=True),
+        ]
+    )
 
 
 _INPUT_KEYS = (
@@ -1182,6 +1204,56 @@ def gsd_tables(s: Summary, sim: Summary | None = None, markdown: bool = False) -
     return [boundaries, format_table(headers, rows, markdown), per_look]
 
 
+def engine_table(s: Summary, score: Summary, patient: Summary, markdown: bool = False) -> str:
+    """Exact values next to the score-engine and the patient-engine simulations.
+
+    The score engine draws the canonical z-process the boundaries assume; the patient engine
+    simulates patients and the real test (t-test, Farrington-Manning z-test or log-rank). A
+    patient-engine value far from the exact one (z beyond +/-2, marked *) shows where the
+    normal approximation behind the design does not hold.
+    """
+    unit = s["sample_size"]["unit"]
+    ex = s["exact"]
+
+    def type_i(sim: Summary) -> tuple[float, float]:
+        if s.get("binding_futility"):
+            return sim["h0"]["reject"], sim["h0"]["reject_se"]
+        return sim["type_i_error"], sim["type_i_error_se"]
+
+    quantities = [
+        ("Type I error", ex["type_i_error"], type_i),
+        ("Power", ex["power"], lambda x: (x["power"], x["power_se"])),
+        (
+            f"Expected {unit} under H0",
+            ex["expected_total_h0"],
+            lambda x: (x["h0"]["expected_total"], x["h0"]["expected_total_se"]),
+        ),
+        (
+            f"Expected {unit} under H1",
+            ex["expected_total_h1"],
+            lambda x: (x["h1"]["expected_total"], x["h1"]["expected_total_se"]),
+        ),
+    ]
+    if "type_i_error_futility_ignored" in ex:
+        quantities.append(
+            (
+                "Type I error if futility is ignored",
+                ex["type_i_error_futility_ignored"],
+                lambda x: (x["h0_ignore_futility"]["reject"], x["h0_ignore_futility"]["reject_se"]),
+            )
+        )
+    rows = []
+    for label, exact, get in quantities:
+        sc, sc_se = get(score)
+        pa, pa_se = get(patient)
+        rows.append([label, exact, sc, sc_se, pa, pa_se, _z(pa, exact, pa_se)])
+    return format_table(
+        ["Quantity", "Exact", "Score sim", "MC SE", "Patient sim", "MC SE", "z (patient vs exact)"],
+        rows,
+        markdown,
+    )
+
+
 def bayes_tables(s: Summary, sim: Summary | None = None, markdown: bool = False) -> list[str]:
     """Tables for a Bayesian interim summary: OCs (exact and simulated) and the decision rule."""
     h0, h1 = s["h0"], s["h1"]
@@ -1486,9 +1558,17 @@ def plot_bayes_oc(
 
 
 def gsd_markdown(
-    s: Summary, sim: Summary | None = None, plots: bool = True, header: str = ""
+    s: Summary,
+    sim: Summary | None = None,
+    plots: bool = True,
+    header: str = "",
+    patient: Summary | None = None,
 ) -> str:
-    """Markdown section for a group-sequential design."""
+    """Markdown section for a group-sequential design.
+
+    ``sim`` is the score-engine simulation; with ``patient`` (the patient-engine one) a
+    table puts the two side by side with the exact values.
+    """
     size = s["sample_size"]
     unit = size["unit"]
     fixed_alpha = s["fixed"]["alpha_two_sided"]
@@ -1545,6 +1625,20 @@ def gsd_markdown(
     ]
     if plots:
         parts.append("![Operating characteristics](oc.png)")
+    if patient is not None and sim is not None:
+        test = {
+            "normal": "the t-test",
+            "binary": "the Farrington-Manning z-test",
+            "survival": "the log-rank test at the calendar time of each look's events",
+        }[s["endpoint"]]
+        parts += [
+            "### Patient-level check",
+            "The boundaries assume the canonical normal z-process. The patient engine instead "
+            f"simulates patients and {test}, with {patient['nsim']:,} trials (seed "
+            f"{patient['seed']}). Values within about 2 MC SE of the exact ones mean the "
+            "approximation holds at this sample size.",
+            engine_table(s, sim, patient, markdown=True),
+        ]
     if s["futility_spending"] is not None and s.get("binding_futility"):
         parts.append(
             "Futility is binding: the efficacy boundaries assume the trial always stops when it "
@@ -1735,6 +1829,8 @@ def write_report(
     gsd: tuple[GroupSequentialDesign, Summary, Summary | None] | None = None,
     bayes_design: tuple[bayes.BayesianInterimDesign, Summary, Summary | None] | None = None,
     ssr_design: tuple[ssr.SSRDesign, Summary] | None = None,
+    patient: Summary | None = None,
+    analysis: Summary | None = None,
 ) -> list[Path]:
     """Write ``report.md`` and its PNG plots into ``out_dir`` (created if needed).
 
@@ -1752,6 +1848,10 @@ def write_report(
         Bayesian part: writes ``bayes_oc.png`` and ``decision_map.png``.
     ssr_design : (SSRDesign, summary), optional
         Sample size re-estimation, reported after the planned design: writes ``ssr.png``.
+    patient : dict, optional
+        Patient-engine simulation summary, shown next to the score-engine one.
+    analysis : dict, optional
+        :func:`inference_summary` of observed z-statistics, reported after the design.
 
     Returns
     -------
@@ -1780,7 +1880,9 @@ def write_report(
         )
         written.append(plot_boundaries(design, out / "boundaries.png"))
         written.append(plot_gsd_oc(design, out / "oc.png", n_max, s["sample_size"]["unit"]))
-        parts.append(gsd_markdown(s, sim))
+        parts.append(gsd_markdown(s, sim, patient=patient))
+        if analysis is not None:
+            parts.append(inference_markdown(analysis))
     if ssr_design is not None:
         sd, ss = ssr_design
         written.append(plot_ssr(sd, out / "ssr.png", ss["n_planned"], ss.get("unit", "patients")))
@@ -1810,7 +1912,13 @@ def write_report(
         "- Cui, L., Hung, H. M. J. and Wang, S.-J. (1999). Modification of sample size in group "
         "sequential clinical trials. *Biometrics* 55, 853-857.\n"
         "- Mehta, C. R. and Pocock, S. J. (2011). Adaptive increase in sample size when interim "
-        "results are promising. *Statistics in Medicine* 30, 3267-3284.",
+        "results are promising. *Statistics in Medicine* 30, 3267-3284.\n"
+        "- Jennison, C. and Turnbull, B. W. (1989). Interim analyses: the repeated confidence "
+        "interval approach. *Journal of the Royal Statistical Society B* 51, 305-361.\n"
+        "- Tsiatis, A. A., Rosner, G. L. and Mehta, C. R. (1984). Exact confidence intervals "
+        "following a group sequential test. *Biometrics* 40, 797-803.\n"
+        "- Tsiatis, A. A. (1981). The asymptotic joint distribution of the efficient scores test "
+        "for the proportional hazards model calculated over time. *Biometrika* 68, 311-315.",
     ]
     md = out / "report.md"
     md.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
