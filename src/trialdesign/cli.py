@@ -20,7 +20,7 @@ import typer
 
 from trialdesign import __version__, accrual, bayes, config, fixed, report, ssr
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
-from trialdesign.patients import simulate_design_patients
+from trialdesign.patients import simulate_design_patients, simulate_survival_ssr
 from trialdesign.simulate import DesignSimulation, simulate_design
 from trialdesign.spending import parse_spending
 
@@ -211,7 +211,15 @@ CpTargetOpt = Annotated[
 MaxFactorOpt = Annotated[
     float | None,
     typer.Option(
-        help="SSR: cap on total patients, as a multiple of the planned maximum [default: 2]."
+        help="SSR: cap on total patients (survival: events), as a multiple of the planned "
+        "maximum [default: 2; 1.5 for survival]."
+    ),
+]
+ExtendOpt = Annotated[
+    str | None,
+    typer.Option(
+        help='SSR, survival: find extra events by "followup" (follow the enrolled patients '
+        'longer) or "accrual" (enrol more at the last accrual rate) [default: followup].'
     ),
 ]
 Z1Opt = Annotated[
@@ -545,12 +553,19 @@ def _resolve_adaptation(
     a = {k: v for k, v in config.merge(cfg, "adaptation", flags).items() if v is not None}
     if not a and not required:
         return None
+    extend = a.get("extend", "followup")
+    if extend not in ("followup", "accrual"):
+        raise ValueError(f'extend must be "followup" or "accrual", got {extend!r}')
     return {
         "interim": _number(a.get("interim_fraction", 0.5), "interim_fraction"),
         "cp_min": _number(a.get("cp_min", 0.36), "cp_min"),
         "cp_target": _number(a.get("cp_target", 0.80), "cp_target"),
-        "max_factor": _number(a.get("max_factor", 2.0), "max_factor"),
+        "max_factor": None
+        if a.get("max_factor") is None
+        else _number(a["max_factor"], "max_factor"),
         "z1": None if a.get("z1") is None else _number(a["z1"], "z1"),
+        "extend": extend,
+        "extend_given": "extend" in a,
     }
 
 
@@ -569,15 +584,18 @@ def _ssr_flags(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any])
 def _ssr_run(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any], nsim, seed):
     """The planned two-look design, the adaptive design and its summary."""
     inp = _resolve_design(cfg, _ssr_flags(cfg, flags, adapt))
-    if inp.endpoint == "survival":
-        raise ValueError(
-            "sample size re-estimation is for normal and binary endpoints (re-estimating "
-            "events for survival is not supported)"
-        )
+    survival = inp.endpoint == "survival"
+    if adapt["extend_given"] and not survival:
+        raise ValueError("extend applies only to the survival endpoint")
+    max_factor = adapt["max_factor"]
+    if max_factor is None:
+        max_factor = 1.5 if survival else 2.0
     gsd, planned = _sequential(inp)
     design = ssr.SSRDesign(
-        gsd, cp_min=adapt["cp_min"], cp_target=adapt["cp_target"], max_factor=adapt["max_factor"]
+        gsd, cp_min=adapt["cp_min"], cp_target=adapt["cp_target"], max_factor=max_factor
     )
+    if survival:
+        return design, _survival_ssr_summary(inp, planned, design, adapt, nsim, seed)
     sims = None
     if nsim is not None:
         rng = np.random.default_rng(seed)
@@ -589,25 +607,79 @@ def _ssr_run(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any], n
     return design, report.ssr_summary(planned, design, adapt["z1"], sims)
 
 
+def _survival_ssr_summary(
+    inp: _DesignInputs,
+    planned: dict[str, Any],
+    design: ssr.SSRDesign,
+    adapt: dict[str, Any],
+    nsim: int | None,
+    seed: int | None,
+) -> dict[str, Any]:
+    """Event re-estimation: needs the accrual model, which sets patients and calendar time."""
+    eff, size = inp.effect, planned["sample_size"]
+    if eff.get("hr0", 1.0) != 1.0:
+        raise ValueError("event re-estimation is for survival superiority only (hr0 = 1)")
+    if "accrual_inputs" not in eff:
+        raise ValueError(
+            "event re-estimation needs an accrual model: give --median-control and two of "
+            "--accrual-time, --accrual-rate and --followup"
+        )
+    study = accrual.survival_study(
+        size["max_events"], eff["hr"], allocation=inp.allocation, **eff["accrual_inputs"]
+    )
+    adaptive = ssr.SurvivalSSR(
+        design,
+        study,
+        events=size["max_events_ceil"],
+        n_total=size["max_n_total_ceil"],
+        extend=adapt["extend"],
+    )
+    sims = None
+    if nsim is not None:
+        if adaptive.extend != "followup":
+            raise ValueError(
+                'simulated checks of event re-estimation need extend = "followup"; leave out --nsim'
+            )
+        s0, s1 = (int(x) for x in np.random.SeedSequence(seed).generate_state(2))
+        sims = [
+            simulate_survival_ssr(adaptive, 1.0, use_futility=False, n_sim=nsim, seed=s0),
+            simulate_survival_ssr(adaptive, eff["hr"], n_sim=nsim, seed=s1),
+        ]
+        sims = [replace(x, seed=seed) for x in sims]
+    return report.ssr_summary(planned, design, adapt["z1"], sims, survival=adaptive)
+
+
 def _print_ssr(s: dict[str, Any]) -> None:
     planned = s["planned"]
-    _print_pairs(
-        {
-            "endpoint": planned["endpoint"],
-            "effect": report.effect_text(planned),
-            "hypothesis": report.hypothesis_text(planned),
-            "alpha_one_sided": planned["alpha_one_sided"],
-            "power (planned)": planned["power"],
-            "efficacy": report.efficacy_text(planned),
-            "futility": report.futility_text(planned),
-            "interim_fraction": s["interim_fraction"],
-            "patients at interim": s["n_interim"],
-            "planned max patients": s["n_planned"],
-            "cap on patients": s["n_cap"],
-            "efficacy z (interim, final)": f"{s['c1']:.4f}, {s['c2']:.4f}",
-            "promising zone (CP)": f"{s['cp_min']:g} to {s['cp_target']:g}",
-        }
-    )
+    noun = s.get("unit", "patients")
+    pairs = {
+        "endpoint": planned["endpoint"],
+        "effect": report.effect_text(planned),
+        "hypothesis": report.hypothesis_text(planned),
+        "alpha_one_sided": planned["alpha_one_sided"],
+        "power (planned)": planned["power"],
+        "efficacy": report.efficacy_text(planned),
+        "futility": report.futility_text(planned),
+        "interim_fraction": s["interim_fraction"],
+        f"{noun} at interim": s["n_interim"],
+        f"planned max {noun}": s["n_planned"],
+        f"cap on {noun}": s["n_cap"],
+        "efficacy z (interim, final)": f"{s['c1']:.4f}, {s['c2']:.4f}",
+        "promising zone (CP)": f"{s['cp_min']:g} to {s['cp_target']:g}",
+    }
+    if "survival" in s:
+        sv = s["survival"]
+        pairs.update(
+            {
+                "patients (planned)": sv["n_total"],
+                "extra events from": sv["extend"],
+                "interim / final month": f"{sv['interim_time']:.1f}, {sv['planned_duration']:.1f}",
+                "final month at cap": (
+                    f"{sv['cap_duration']:.1f} ({sv['cap_patients']:.0f} patients)"
+                ),
+            }
+        )
+    _print_pairs(pairs)
     zones, oc, *sim = report.ssr_tables(s)
     typer.echo(f"\nZones\n{zones}\n\nOperating characteristics (exact)\n{oc}")
     if sim:
@@ -616,10 +688,15 @@ def _print_ssr(s: dict[str, Any]) -> None:
         i = s["interim"]
         typer.echo(
             f"\nInterim z1 = {i['z1']:.3f}: {i['zone']} zone, CP at observed trend "
-            f"{i['cp_observed']:.4f} (at design effect {i['cp_design']:.4f}); total patients "
+            f"{i['cp_observed']:.4f} (at design effect {i['cp_design']:.4f}); total {noun} "
             f"{i['n_total']}, CP at observed trend after re-estimation "
             f"{i['cp_observed_after']:.4f}"
         )
+        if "expected_duration" in i:
+            typer.echo(
+                f"Final analysis expected at month {i['expected_duration']:.1f} with "
+                f"{i['expected_patients']:.0f} patients (at the design hazard ratio)"
+            )
 
 
 def _fail(exc: Exception) -> typer.Exit:
@@ -911,6 +988,12 @@ def ssr_cmd(
     pt: PtOpt = None,
     hr: HrOpt = None,
     delta0: Delta0Opt = None,
+    median_control: MedianControlOpt = None,
+    accrual_time: AccrualTimeOpt = None,
+    accrual_rate: AccrualRateOpt = None,
+    followup: FollowupOpt = None,
+    dropout: DropoutOpt = None,
+    dropout_time: DropoutTimeOpt = None,
     alpha_one_sided: AlphaOneOpt = None,
     alpha_two_sided: AlphaTwoOpt = None,
     power: PowerOpt = None,
@@ -922,19 +1005,23 @@ def ssr_cmd(
     cp_min: CpMinOpt = None,
     cp_target: CpTargetOpt = None,
     max_factor: MaxFactorOpt = None,
+    extend: ExtendOpt = None,
     z1: Z1Opt = None,
     nsim: NsimOpt = None,
     seed: SeedOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
-    """Promising-zone sample size re-estimation at one interim (normal and binary endpoints).
+    """Promising-zone sample size re-estimation at one interim (survival: events).
 
     Plans a two-look group-sequential design (looks at --interim-fraction and 1), then, in
     the promising zone of conditional power at the observed trend, raises the second-stage
     sample size to reach --cp-target, up to --max-factor times the planned maximum. The final
     test is the Cui-Hung-Wang weighted inverse-normal test, so alpha is controlled exactly.
-    Prints the zones and exact operating characteristics; --z1 applies the rule to an
-    observed interim result, and --nsim adds simulated checks.
+    For survival the number of events is re-estimated, which needs the accrual model
+    (--median-control and two of --accrual-time, --accrual-rate, --followup); --extend says
+    how the extra events are found. Prints the zones and exact operating characteristics;
+    --z1 applies the rule to an observed interim result, and --nsim adds simulated checks
+    (for survival, patient-level).
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
     try:
@@ -949,9 +1036,8 @@ def ssr_cmd(
         _print_json(s)
         return
     seed_text = f" | seed {seed_used}" if seed_used is not None else ""
-    typer.echo(
-        f"trialdesign {__version__}{seed_text} | sample size re-estimation | alpha is one-sided"
-    )
+    what = "event" if s.get("unit") == "events" else "sample size"
+    typer.echo(f"trialdesign {__version__}{seed_text} | {what} re-estimation | alpha is one-sided")
     _print_ssr(s)
 
 
@@ -1002,6 +1088,7 @@ def report_cmd(
     cp_min: CpMinOpt = None,
     cp_target: CpTargetOpt = None,
     max_factor: MaxFactorOpt = None,
+    extend: ExtendOpt = None,
     z1: Z1Opt = None,
     nsim: NsimOpt = None,
     seed: SeedOpt = None,

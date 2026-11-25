@@ -10,7 +10,8 @@ package for:
   or non-inferiority,
 - group-sequential boundaries with O'Brien-Fleming-type, Pocock-type, Hwang-Shih-DeCani,
   Kim-DeMets or user-specified spending, and non-binding (default) or binding futility,
-- promising-zone sample size re-estimation at an interim, with the Cui-Hung-Wang test,
+- promising-zone sample size re-estimation at an interim, with the Cui-Hung-Wang test, and
+  its survival counterpart that re-estimates the number of events,
 - survival accrual, follow-up and dropout: patients, study duration and the calendar time of
   each look,
 - a Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance,
@@ -177,6 +178,46 @@ ignored. For the quickstart trial with `--efficacy hsd:-4 --futility hsd:-2`:
 
 Binding futility is not available with sample size re-estimation.
 
+#### Survival: re-estimating the number of events
+
+For a time-to-event endpoint, `trialdesign ssr` re-estimates the number of events instead.
+The interim is at half the planned events and the cap (`--max-factor`, default 1.5 for
+survival) applies to total events. The stage-2 statistic is the log-rank score increment
+between the two analyses, which has independent increments (Tsiatis 1981), so the same
+weighted test holds alpha. It needs the accrual model, which turns events into calendar time
+and patients. `--extend followup` (default) follows the enrolled patients longer;
+`--extend accrual` enrols more at the last accrual rate:
+
+```bash
+trialdesign ssr --endpoint survival --hr 0.7 --median-control 12 --accrual-time 18 \
+  --followup 12 --z1 1.5 --nsim 10000
+```
+
+```text
+Zone                 Interim z1  Observed / design effect  Total events
+Unfavourable            < 1.213                   < 0.611           248
+Promising        1.213 to 1.813            0.611 to 0.913    248 to 372
+Favourable       1.813 to 2.963                  >= 0.913           248
+Efficacy (stop)        >= 2.963                                     124
+```
+
+The output adds the expected study duration of each scenario and the month of the final
+analysis at the cap. Following 396 patients until 372 events takes until month 69 here, against
+37 with `--extend accrual`; check that before choosing the cap. `--nsim` checks the design with
+the patient-level simulator, which re-estimates the events at the interim log-rank z. Alpha is
+controlled only if the interim decision uses the log-rank statistic alone: using other data from
+stage-1 patients (progression, biomarkers) breaks the independent increments (Bauer and Posch
+2004; Jenkins, Stone and Jennison 2011).
+
+The defaults come from a grid over the cap (1.25, 1.5, 2) and `--cp-min` (0.2, 0.36, 0.5) for
+the same trial with 600 patients. At a hazard ratio of 0.75 against a design value of 0.7, the plain design has
+power 0.618; cap 1.5 with CP 0.36 to 0.8 gives 0.656 for 21 more events and 1.4 more months on
+average; a cap of 2 with `--cp-min 0.2` gives 0.699 for 51 more events and 4.6 more months. The
+power per extra event is about the same across the grid, so the cap mostly trades duration
+for power. The exact characteristics use the Schoenfeld information D r / (1 + r)^2; with
+unequal allocation the log-rank test's power departs from it by about a point, and the
+patient-level check is the better guide.
+
 ## Command line
 
 | Command | Does |
@@ -184,7 +225,7 @@ Binding futility is not available with sample size re-estimation.
 | `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics |
 | `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test |
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
-| `trialdesign ssr` | Promising-zone sample size re-estimation: zones, exact OCs, the rule applied to an interim z |
+| `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z |
 | `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics |
 
 Each command takes flags, a TOML design file (`--config`), or both; flags override the file.
@@ -286,6 +327,8 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Patient-level survival simulation: power, type I error, look times, duration, expected patients and events | `rpact::getSimulationSurvival` (100,000 runs) | 6 | 2 MC SE (power), 3 MC SE (per look, calendar) |
 | Log-rank statistic | `scipy.stats.logrank` | 5 | 1e-10 |
 | Patient-level normal (t-test) and binary (Farrington-Manning) simulation, superiority and non-inferiority: power, type I error, per-look stopping, expected sample size | `rpact::getSimulationMeans`, `getSimulationRates` (100,000 runs) | 8 | 3 MC SE |
+| Survival event re-estimation: conditional power given the interim log-rank z | `rpact::getConditionalPower` | 4 | 1e-6 |
+| Survival event re-estimation, patient level: power, type I error, interim stops, expected events, duration and patients | `rpact::getSimulationSurvival` with `conditionalPower` (100,000 runs) | 4 | 3 MC SE |
 
 Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
 rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/bayes_reference_values.json) and
@@ -294,7 +337,8 @@ rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnih
 [`tests/ssr_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_reference_values.json) and
 [`tests/spending_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/spending_reference_values.json) and
 [`tests/patients_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_reference_values.json) and
-[`tests/patients_endpoints_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_endpoints_reference_values.json) (rpact 3.4.0).
+[`tests/patients_endpoints_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_endpoints_reference_values.json) and
+[`tests/ssr_survival_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_survival_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -311,6 +355,7 @@ Rscript tests/r/ssr_reference_values.R > ssr.json && mv ssr.json tests/ssr_refer
 Rscript tests/r/spending_reference_values.R > sp.json && mv sp.json tests/spending_reference_values.json
 Rscript tests/r/patients_reference_values.R > pat.json && mv pat.json tests/patients_reference_values.json
 Rscript tests/r/patients_endpoints_reference_values.R > pe.json && mv pe.json tests/patients_endpoints_reference_values.json
+Rscript tests/r/ssr_survival_reference_values.R > ssr.json && mv ssr.json tests/ssr_survival_reference_values.json
 ```
 
 ## Development
@@ -332,7 +377,7 @@ The package is deliberately narrow: two arms and one primary endpoint. Not yet c
 
 - multi-arm, platform and basket trials;
 - equivalence (two one-sided tests);
-- blinded or event-driven (survival) sample size re-estimation, and enrichment designs;
+- blinded sample size re-estimation, and enrichment designs;
 - multiplicity across several endpoints (graphical testing);
 - response-adaptive randomisation;
 - Stan or PyMC models and dynamic borrowing;

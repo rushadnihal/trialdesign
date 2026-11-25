@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import warnings
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -59,13 +60,17 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy import integrate, optimize, stats
 
+from trialdesign import accrual
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
 
 __all__ = [
     "SSRDesign",
     "SSROperatingCharacteristics",
     "SSRSimulation",
+    "SurvivalSSR",
+    "SurvivalSSROperatingCharacteristics",
     "ssr_design",
+    "survival_ssr",
 ]
 
 Test = Literal["chw", "naive"]
@@ -401,3 +406,275 @@ def ssr_design(
         futility_spending=futility_spending,
     )
     return SSRDesign(gsd, cp_min=cp_min, cp_target=cp_target, max_factor=max_factor)
+
+
+# ------------------------------------------------------------------ survival: events
+
+
+Extend = Literal["followup", "accrual"]
+_M_GRID = 97  # stage-2 multipliers at which calendar time is solved, then interpolated
+
+
+@dataclass(frozen=True)
+class SurvivalSSROperatingCharacteristics:
+    """Exact operating characteristics of an event-driven adaptive survival design.
+
+    Events, months and patients are absolute numbers, not fractions. Calendar quantities use
+    the expected-events curve of the accrual model under the true hazard ratio.
+    """
+
+    hazard_ratio: float
+    reject_prob: float
+    prob_efficacy_interim: float
+    prob_futility_interim: float
+    prob_zone: dict[str, float]
+    expected_events: float
+    expected_duration: float
+    expected_patients: float
+    max_events: int
+
+
+@dataclass(frozen=True)
+class SurvivalSSR:
+    r"""Promising-zone re-estimation of the number of events in a survival trial.
+
+    On the log-rank scale the information is :math:`I = D\,r/(1+r)^2` at :math:`D` events
+    (:math:`D/4` at 1:1), and the log-rank score has approximately independent increments
+    (Tsiatis 1981). So the z-scale rule of :class:`SSRDesign` carries over unchanged with
+    sample size replaced by events: the interim is at :math:`D_1 = t_1 D` events, the
+    stage-2 multiplier :math:`m` scales the planned :math:`D - D_1` stage-2 events, the cap
+    ``design.max_factor`` applies to total events, and the final test is the CHW statistic
+    with :math:`Z_2^\ast` from the log-rank score increment between the two analyses.
+
+    That controls alpha only if the interim decision uses the log-rank statistic alone. If it
+    also uses other data from stage-1 patients (progression, biomarkers), patients who have
+    their event in stage 2 break the independence of the increments (Bauer and Posch 2004;
+    Jenkins, Stone and Jennison 2011).
+
+    The extra events take calendar time. With ``extend="followup"`` the enrolled patients are
+    followed longer; with ``extend="accrual"`` the last accrual segment is extended at its
+    rate, keeping the planned minimum follow-up, so more patients are enrolled.
+
+    Attributes
+    ----------
+    design : SSRDesign
+        The z-scale rule; ``max_factor`` caps total events as a multiple of ``events``.
+    study : SurvivalStudy
+        Accrual, control hazard, dropout and allocation of the planned design.
+    events : int
+        Planned final events :math:`D`.
+    n_total : int
+        Planned patients.
+    extend : {"followup", "accrual"}
+        How the extra events are found.
+
+    References
+    ----------
+    Tsiatis, A. A. (1981). *Biometrika* 68, 311-315. Schäfer, H. and Müller, H.-H. (2001).
+    Modification of the sample size and the schedule of interim analyses in survival trials
+    based on data inspections. *Statistics in Medicine* 20, 3741-3751. Bauer, P. and Posch, M.
+    (2004). *Statistics in Medicine* 23, 1333-1334. Jenkins, M., Stone, A. and Jennison, C.
+    (2011). An adaptive seamless phase II/III design for oncology trials with subpopulation
+    selection using correlated survival endpoints. *Pharmaceutical Statistics* 10, 347-356.
+    Mehta & Pocock (2011); Cui, Hung & Wang (1999).
+    """
+
+    design: SSRDesign
+    study: accrual.SurvivalStudy
+    events: int
+    n_total: int
+    extend: Extend = "followup"
+
+    def __post_init__(self) -> None:
+        if self.extend not in ("followup", "accrual"):
+            raise ValueError('extend must be "followup" or "accrual"')
+        if self.events < 2 or self.interim_events < 1 or self.interim_events >= self.events:
+            raise ValueError("the interim needs at least one event and fewer than the final")
+        if self.n_total < self.events:
+            raise ValueError("n_total must be at least the planned events")
+        if self.extend == "followup" and self.max_events >= self._event_ceiling(
+            self.study.hazard_ratio
+        ):
+            raise ValueError(
+                f"{self.n_total} patients cannot give the capped {self.max_events} events "
+                "by following them longer; lower max_factor, enrol more patients, or use "
+                'extend="accrual"'
+            )
+
+    # --------------------------------------------------------------------- events
+
+    @property
+    def interim_events(self) -> int:
+        return round(self.design.t1 * self.events)
+
+    @property
+    def max_events(self) -> int:
+        """Cap on total events: ``max_factor`` times the planned events, rounded up."""
+        return math.ceil(self.design.max_factor * self.events - 1e-9)
+
+    def total_events(self, z1: ArrayLike) -> NDArray[np.int64]:
+        """Total events at the final analysis for a trial that continues past the interim."""
+        m = self.design.stage2_multiplier(z1)
+        d1 = self.interim_events
+        extra = np.ceil((self.events - d1) * m - 1e-9)
+        return np.minimum(d1 + extra, self.max_events).astype(np.int64)
+
+    # ------------------------------------------------------------------- calendar
+
+    def _event_ceiling(self, hr: float) -> float:
+        s, pi_t = self.study, self.study.allocation / (1 + self.study.allocation)
+        lam_c, lam_t = s.hazard_control, hr * s.hazard_control
+        eta = s.dropout
+        return self.n_total * ((1 - pi_t) * lam_c / (lam_c + eta) + pi_t * lam_t / (lam_t + eta))
+
+    def _accrual(self, end: float | None = None) -> tuple[NDArray, NDArray]:
+        """Accrual segments rescaled to ``n_total`` patients, the last ending at ``end``."""
+        s = self.study
+        ends = s.accrual_times.copy()
+        rates = s.accrual_rates * self.n_total / s.n_total
+        if end is not None:
+            ends[-1] = end
+        return ends, rates
+
+    def _events_at(self, t: float, hr: float, end: float | None = None) -> float:
+        ends, rates = self._accrual(end)
+        s = self.study
+        return accrual.expected_events(
+            t, ends, rates, s.hazard_control, hr, s.dropout, s.allocation
+        )
+
+    def time_of_events(self, events: float, hr: float | None = None) -> float:
+        """Expected calendar time of the ``events``-th event with the planned accrual."""
+        hr = self.study.hazard_ratio if hr is None else hr
+        if events >= self._event_ceiling(hr):
+            return math.inf
+        f = lambda t: self._events_at(t, hr) - events  # noqa: E731
+        hi = max(self.study.study_duration, 1.0)
+        while f(hi) < 0:
+            hi *= 2
+        return float(optimize.brentq(f, 0.0, hi, xtol=1e-10))
+
+    def _accrual_end_for(self, events: float, hr: float) -> float:
+        """End of accrual, at the last segment's rate, that gives ``events`` by end + followup."""
+        ends, _ = self._accrual()
+        start = float(ends[-2]) if ends.size > 1 else 0.0
+        f_up = self.study.followup
+        f = lambda e: self._events_at(e + f_up, hr, e) - events  # noqa: E731
+        lo = max(start + 1e-9, float(ends[-1]))
+        if f(lo) >= 0:
+            return lo
+        hi = 2 * lo
+        while f(hi) < 0:
+            hi *= 2
+        return float(optimize.brentq(f, lo, hi, xtol=1e-10))
+
+    def _patients_by(self, t: float, end: float | None = None) -> float:
+        ends, rates = self._accrual(end)
+        starts = np.concatenate([[0.0], ends[:-1]])
+        return float(np.sum(rates * (np.minimum(ends, t) - np.minimum(starts, t))))
+
+    def final_analysis(self, events: float, hr: float | None = None) -> tuple[float, float]:
+        """Expected calendar time of the final analysis and patients enrolled by then."""
+        hr = self.study.hazard_ratio if hr is None else hr
+        if self.extend == "followup" or events <= self.events:
+            t = self.time_of_events(events, hr)
+            return t, self._patients_by(t)
+        end = self._accrual_end_for(events, hr)
+        t = end + self.study.followup
+        return t, self._patients_by(t, end)
+
+    # --------------------------------------------------------- exact characteristics
+
+    def drift(self, hr: float) -> float:
+        """Mean of the planned final log-rank z under hazard ratio ``hr``."""
+        r = self.study.allocation
+        return -math.log(hr) * math.sqrt(self.events * r / (1 + r) ** 2)
+
+    def operating_characteristics(
+        self, hr: float, use_futility: bool = True, test: Test = "chw"
+    ) -> SurvivalSSROperatingCharacteristics:
+        """Exact rejection probability, zones, expected events, duration and patients.
+
+        The z-scale part is :meth:`SSRDesign.operating_characteristics` at the drift of
+        ``hr``; expected calendar time and patients integrate the accrual model's final
+        analysis over the interim z (events treated as continuous in the integral).
+        """
+        d = self.design
+        delta = self.drift(hr)
+        oc = d.operating_characteristics(delta, use_futility, test)
+        t1, mu1 = d.t1, delta * math.sqrt(d.t1)
+        lo = d.b1 if (use_futility and d.b1 is not None) else mu1 - 12.0
+        hi = d.c1
+        p_stop = oc.prob_efficacy_interim + oc.prob_futility_interim
+        t_int = self.time_of_events(self.interim_events, hr)
+        grid = np.linspace(1.0, d.m_max, _M_GRID) if d.m_max > 1 else np.ones(2)
+        finals = [
+            self.final_analysis(
+                min(t1 * self.events + (1 - t1) * self.events * g, self.max_events), hr
+            )
+            for g in grid
+        ]
+        months = np.array([f[0] for f in finals])
+        pts = np.array([f[1] for f in finals])
+
+        def at(values: NDArray):
+            return lambda z: (
+                stats.norm.pdf(z - mu1)
+                * float(np.interp(float(d.stage2_multiplier(np.asarray(z))), grid, values))
+            )
+
+        with warnings.catch_warnings():  # piecewise-linear integrands: roundoff notices only
+            warnings.simplefilter("ignore", integrate.IntegrationWarning)
+            dur = p_stop * t_int + d._integrate(at(months), lo, hi)
+            pat = p_stop * self._patients_by(t_int) + d._integrate(at(pts), lo, hi)
+        return SurvivalSSROperatingCharacteristics(
+            hazard_ratio=float(hr),
+            reject_prob=oc.reject_prob,
+            prob_efficacy_interim=oc.prob_efficacy_interim,
+            prob_futility_interim=oc.prob_futility_interim,
+            prob_zone=oc.prob_zone,
+            expected_events=oc.expected_n_fraction * self.events,
+            expected_duration=float(dur),
+            expected_patients=float(pat),
+            max_events=self.max_events,
+        )
+
+
+def survival_ssr(
+    study: accrual.SurvivalStudy,
+    interim: float = 0.5,
+    *,
+    events: int | None = None,
+    n_total: int | None = None,
+    alpha_one_sided: float = 0.025,
+    power: float = 0.80,
+    efficacy_spending: str = "obf",
+    futility_spending: str | None = None,
+    cp_min: float = 0.36,
+    cp_target: float = 0.80,
+    max_factor: float = 1.5,
+    extend: Extend = "followup",
+) -> SurvivalSSR:
+    """Build a two-look event-driven design with promising-zone event re-estimation.
+
+    ``study`` gives the accrual and event model; ``events`` and ``n_total`` default to its
+    values rounded up (pass the group-sequential maximum events here, the study's events
+    times the inflation factor). See :class:`SurvivalSSR`.
+    """
+    design = ssr_design(
+        interim,
+        alpha_one_sided,
+        power,
+        efficacy_spending,
+        futility_spending,
+        cp_min,
+        cp_target,
+        max_factor,
+    )
+    return SurvivalSSR(
+        design=design,
+        study=study,
+        events=math.ceil(study.events - 1e-9) if events is None else int(events),
+        n_total=math.ceil(study.n_total - 1e-9) if n_total is None else int(n_total),
+        extend=extend,
+    )
