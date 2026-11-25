@@ -2,7 +2,11 @@
 
 All notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.0 (2026-11-25)
+
+A patient-level simulator next to the score-process engine, survival sample size re-estimation
+on the events scale, end-of-trial inference and equivalence designs. v0.2 config files and
+Python calls keep working, and the default (score) engine gives the same numbers as before.
 
 ### Added
 
@@ -44,6 +48,11 @@ All notable changes to this project. Versions follow [Semantic Versioning](https
   (`trialdesign.equivalence`): sample size, power and the test itself, with symmetric or
   asymmetric margins. `trialdesign design --margin` (or `margin` under `[design]`).
 - Python 3.13 in the CI matrix and the package classifiers.
+- `trialdesign report --engine patient` puts a 10,000-trial patient-level simulation next to
+  the score-engine one and the exact values; `report --analyse` adds an inference section.
+- `examples/phase3_survival_ssr.toml`, and a v0.3 addendum to the design memo: a patient-level
+  check of the phase 3 binary design (its z-test is slightly liberal at 172 patients) and how
+  to report the end of a group-sequential trial.
 
 ### Changed
 
