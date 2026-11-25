@@ -33,6 +33,17 @@ All notable changes to this project. Versions follow [Semantic Versioning](https
 - `trialdesign ssr` and `trialdesign report` accept `--endpoint survival` with the accrual
   options, and `--extend` (or `extend` under `[adaptation]`); `--nsim` then runs the
   patient-level check.
+- **End-of-trial inference** (`trialdesign.inference.analyse`): repeated confidence intervals
+  and p-values at every look, and, once a boundary is crossed or at the last look, the
+  stage-wise ordering p-value, median-unbiased estimate and confidence interval. Binding
+  futility is followed, non-binding ignored. Validated against `rpact`
+  (getRepeatedConfidenceIntervals, getRepeatedPValues, getFinalPValue,
+  getFinalConfidenceInterval). From the command line: `trialdesign design --looks ...
+  --analyse z1,z2,...` (or `analyse` under `[sequential]`).
+- **Equivalence by two one-sided tests** for fixed normal and binary designs
+  (`trialdesign.equivalence`): sample size, power and the test itself, with symmetric or
+  asymmetric margins. `trialdesign design --margin` (or `margin` under `[design]`).
+- Python 3.13 in the CI matrix and the package classifiers.
 
 ### Changed
 

@@ -32,7 +32,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
 
-from trialdesign import accrual, bayes, fixed, ssr
+from trialdesign import accrual, bayes, equivalence, fixed, inference, ssr
 from trialdesign.boundaries import (
     GroupSequentialDesign,
     crossing_probabilities,
@@ -58,6 +58,8 @@ __all__ = [
     "gsd_markdown",
     "gsd_tables",
     "hypothesis_text",
+    "inference_summary",
+    "inference_text",
     "needs_alpha_note",
     "plot_bayes_oc",
     "plot_boundaries",
@@ -106,6 +108,57 @@ def _ceil(x: float) -> int:
 # ------------------------------------------------------------------------ summaries
 
 
+def _equivalence_summary(
+    endpoint: str,
+    margin: float | Sequence[float],
+    delta: float | None,
+    sd: float | None,
+    pc: float | None,
+    pt: float | None,
+    alpha_two_sided: float,
+    power: float,
+    allocation: float,
+    method: str,
+    delta0: float | None,
+    hr0: float | None,
+) -> Summary:
+    if endpoint == "survival":
+        raise ValueError("equivalence (--margin) is for normal and binary endpoints")
+    if delta0 is not None or hr0 is not None:
+        raise ValueError("give --margin for equivalence or --delta0 for non-inferiority, not both")
+    if method != "z":
+        raise ValueError('equivalence uses the normal approximation; leave method as "z"')
+    alpha = alpha_two_sided / 2
+    lo, hi = equivalence._margins(margin)
+    if endpoint == "normal":
+        assert delta is not None and sd is not None
+        res = equivalence.sample_size_equivalence_normal(
+            (lo, hi), sd, delta, alpha, power, allocation
+        )
+        inputs: Summary = {"delta": delta, "sd": sd}
+    elif endpoint == "binary":
+        assert pc is not None and pt is not None
+        res = equivalence.sample_size_equivalence_binary(pc, pt, (lo, hi), alpha, power, allocation)
+        inputs = {"p_control": pc, "p_treatment": pt}
+    else:
+        raise ValueError(f"unknown endpoint {endpoint!r}")
+    return {
+        "endpoint": endpoint,
+        "design": "fixed",
+        **inputs,
+        "margin": [lo, hi],
+        "alpha_two_sided": alpha_two_sided,
+        "alpha_each_test": alpha,
+        "power": power,
+        "allocation": allocation,
+        "n_control": res.n_control,
+        "n_treatment": res.n_treatment,
+        "n_control_ceil": res.n_control_ceil,
+        "n_treatment_ceil": res.n_treatment_ceil,
+        "n_total_ceil": res.n_total_ceil,
+    }
+
+
 def fixed_summary(
     endpoint: str,
     *,
@@ -122,6 +175,7 @@ def fixed_summary(
     delta0: float | None = None,
     hr0: float | None = None,
     accrual_inputs: Summary | None = None,
+    margin: float | Sequence[float] | None = None,
 ) -> Summary:
     """Fixed-design sample size (or events) as a flat dictionary.
 
@@ -135,7 +189,27 @@ def fixed_summary(
     (``median_control`` plus two of ``accrual_time``, ``accrual_rate`` and ``followup``,
     and optionally ``dropout`` and ``dropout_time``). It turns events into patients and
     calendar time, in place of a single ``prob_event``.
+
+    ``margin`` (normal and binary) makes it an equivalence design by two one-sided tests,
+    each at level ``alpha_two_sided / 2`` (:mod:`trialdesign.equivalence`): a symmetric
+    margin, or (lower, upper) on the difference T - C. ``delta`` (normal) or the rates
+    (binary) are then the true difference the power is computed at.
     """
+    if margin is not None:
+        return _equivalence_summary(
+            endpoint,
+            margin,
+            delta,
+            sd,
+            pc,
+            pt,
+            alpha_two_sided,
+            power,
+            allocation,
+            method,
+            delta0,
+            hr0,
+        )
     common = {"alpha_two_sided": alpha_two_sided, "power": power, "allocation": allocation}
     if endpoint == "survival":
         assert hr is not None
@@ -195,6 +269,103 @@ def fixed_summary(
         "n_treatment_ceil": res.n_treatment_ceil,
         "n_total_ceil": res.n_total_ceil,
     }
+
+
+def inference_summary(res: inference.GroupSequentialInference, endpoint: str) -> Summary:
+    """End-of-trial inference as a dictionary, with effects on the endpoint's scale.
+
+    Effects are differences T - C for normal and binary endpoints and hazard ratios for
+    survival, mapped from the drift with the planned information (see
+    :func:`trialdesign.inference.analyse`).
+    """
+    hr = endpoint == "survival"
+
+    def eff(x):
+        if x is None or res.effect_per_drift is None:
+            return None
+        v = res.to_effect(x)
+        v = np.exp(v) if hr else v
+        return float(v) if np.ndim(v) == 0 else [float(a) for a in v]
+
+    lo, hi = eff(res.rci_lower_drift), eff(res.rci_upper_drift)
+    if hr and lo is not None:  # a larger drift is a smaller hazard ratio
+        lo, hi = hi, lo
+    ci = [eff(res.ci_lower_drift), eff(res.ci_upper_drift)]
+    if hr:
+        ci = ci[::-1]
+    return {
+        "effect": "hazard_ratio" if hr else "difference",
+        "stage": res.stage,
+        "crossed": res.crossed,
+        "final": res.final,
+        "level": res.level,
+        "looks": [
+            {
+                "look": k + 1,
+                "info_rate": float(res.info_rates[k]),
+                "z": float(res.z[k]),
+                "efficacy": float(res.efficacy[k]),
+                "estimate": None if eff(res.estimate_drift) is None else eff(res.estimate_drift)[k],
+                "rci_lower": None if lo is None else lo[k],
+                "rci_upper": None if hi is None else hi[k],
+                "repeated_p": float(res.repeated_p[k]),
+            }
+            for k in range(res.stage)
+        ],
+        "p_value": res.p_value,
+        "median_unbiased": eff(res.median_unbiased_drift),
+        "ci_lower": ci[0],
+        "ci_upper": ci[1],
+        "drift": {
+            "median_unbiased": res.median_unbiased_drift,
+            "ci_lower": res.ci_lower_drift,
+            "ci_upper": res.ci_upper_drift,
+        },
+    }
+
+
+def inference_text(s: Summary) -> str:
+    """The per-look table and the final line of an inference summary."""
+    name = "HR" if s["effect"] == "hazard_ratio" else "T - C"
+    pct = f"{100 * s['level']:g}%"
+    rows = [
+        [
+            x["look"],
+            x["info_rate"],
+            x["z"],
+            x["efficacy"],
+            x["estimate"],
+            f"{x['rci_lower']:.4f} to {x['rci_upper']:.4f}",
+            x["repeated_p"],
+        ]
+        for x in s["looks"]
+    ]
+    table = format_table(
+        [
+            "Look",
+            "Info",
+            "z",
+            "Efficacy z",
+            f"Estimate ({name})",
+            f"Repeated {pct} CI",
+            "Repeated p",
+        ],
+        rows,
+    )
+    if s["p_value"] is None:
+        last = (
+            f"No boundary crossed at look {s['stage']}: the trial continues. Repeated CIs and "
+            "p-values are valid at any look; the stage-wise p-value and estimate need the end "
+            "of the trial."
+        )
+    else:
+        why = "efficacy boundary crossed" if s["crossed"] else "last look, boundary not crossed"
+        last = (
+            f"Look {s['stage']} ({why}). Stage-wise ordering: p = {s['p_value']:.4g}, "
+            f"median-unbiased {name} {s['median_unbiased']:.4f}, {pct} CI "
+            f"{s['ci_lower']:.4f} to {s['ci_upper']:.4f}."
+        )
+    return f"{table}\n\n{last}"
 
 
 _INPUT_KEYS = (
@@ -898,6 +1069,10 @@ def hypothesis_text(s: Summary) -> str:
     harmful side of no difference is non-inferiority; on the beneficial side it is
     superiority by a margin.
     """
+    name = "mean_T - mean_C" if s["endpoint"] == "normal" else "p_T - p_C"
+    if s.get("margin") is not None:
+        lo, hi = s["margin"]
+        return f"equivalence (two one-sided tests), H0: {name} <= {lo:g} or >= {hi:g}"
     if s["endpoint"] == "survival":
         h0 = s.get("hazard_ratio0")
         if h0 is None or h0 == 1:
@@ -906,7 +1081,6 @@ def hypothesis_text(s: Summary) -> str:
         kind = "non-inferiority" if gap * math.log(h0) < 0 else "superiority by a margin"
         return f"{kind}, H0: HR {'>=' if gap < 0 else '<='} {h0:g}"
     d0 = s.get("delta0")
-    name = "mean_T - mean_C" if s["endpoint"] == "normal" else "p_T - p_C"
     if d0 is None or d0 == 0:
         return f"superiority, H0: {name} = 0"
     effect = s["delta"] if s["endpoint"] == "normal" else s["p_treatment"] - s["p_control"]
