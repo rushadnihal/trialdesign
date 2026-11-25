@@ -21,6 +21,18 @@ All notable changes to this project. Versions follow [Semantic Versioning](https
 - `trialdesign simulate --engine patient` (or `engine = "patient"` under `[simulation]`),
   default 10,000 trials. The `score` engine stays the default and its output is unchanged.
 - A `slow` pytest marker for long simulation checks, run on demand with `pytest -m slow`.
+- **Survival event re-estimation** (`trialdesign.ssr.survival_ssr`, `SurvivalSSR`): the
+  promising-zone rule on the number of events, with the CHW test on log-rank score
+  increments. Exact power, zones, expected events, study duration and patients; the extra
+  events come from longer follow-up (`extend="followup"`, default) or longer accrual
+  (`extend="accrual"`). Cap default 1.5 times the planned events. Validated against
+  `rpact::getConditionalPower` and `rpact::getSimulationSurvival` with event re-estimation.
+- `trialdesign.patients.simulate_survival_ssr`: patient-level simulation of that design,
+  re-estimating the events at the interim log-rank z, with the CHW and the naive log-rank
+  test. `patients.logrank_score` returns the log-rank score and its variance.
+- `trialdesign ssr` and `trialdesign report` accept `--endpoint survival` with the accrual
+  options, and `--extend` (or `extend` under `[adaptation]`); `--nsim` then runs the
+  patient-level check.
 
 ### Changed
 

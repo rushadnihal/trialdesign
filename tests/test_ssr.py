@@ -173,10 +173,10 @@ def test_cli_ssr_json_and_interim_rule() -> None:
     assert i["cp_observed_after"] == pytest.approx(0.8, abs=1e-6) or i["n_total"] == 704
 
 
-def test_cli_ssr_rejects_survival_and_extra_looks() -> None:
+def test_cli_ssr_survival_needs_accrual_and_extra_looks_fail() -> None:
     result = runner.invoke(app, ["ssr", "--endpoint", "survival", "--hr", "0.7"])
     assert result.exit_code == 2
-    assert "normal and binary endpoints" in result.output
+    assert "needs an accrual model" in result.output
     cfg = str(EXAMPLES / "phase3_ssr.toml")
     result = runner.invoke(app, ["report", "--config", cfg, "--looks", "3"])
     assert result.exit_code == 2

@@ -13,8 +13,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from typer.testing import CliRunner
 
 from trialdesign import accrual
+from trialdesign.cli import app
 from trialdesign.patients import simulate_survival, simulate_survival_ssr
 from trialdesign.simulate import mc_se
 from trialdesign.ssr import SurvivalSSR, survival_ssr
@@ -217,3 +219,57 @@ def test_input_checks():
         simulate_survival_ssr(adaptive, n_sim=10)
     with pytest.raises(ValueError, match="hazard_ratio"):
         simulate_survival_ssr(survival_ssr(study, events=248, n_total=600), 0.0, n_sim=10)
+
+
+# --------------------------------------------------------------------------- CLI
+
+SURV = ["--endpoint", "survival", "--hr", "0.7", "--median-control", "12"]
+SURV += ["--accrual-time", "18", "--followup", "12"]
+runner = CliRunner()
+
+
+def test_cli_ssr_survival_json():
+    result = runner.invoke(app, ["ssr", *SURV, "--z1", "1.5", "--json"])
+    assert result.exit_code == 0, result.output
+    out = json.loads(result.output)
+    assert out["unit"] == "events"
+    assert (out["n_interim"], out["n_planned"], out["n_cap"]) == (124, 248, 372)
+    assert out["max_factor"] == 1.5  # survival default
+    assert out["exact"]["type_i_error"] == pytest.approx(0.025, abs=1e-6)
+    i = out["interim"]
+    assert i["zone"] == "promising" and 248 < i["n_total"] <= 372
+    assert i["expected_duration"] > out["survival"]["planned_duration"]
+    study = accrual.survival_study(
+        out["planned"]["sample_size"]["max_events"], 0.7, 12, accrual_time=18, followup=12
+    )
+    adaptive = SurvivalSSR(_ssr_design(), study, 248, out["survival"]["n_total"])
+    assert out["exact"]["effects"][0]["expected_duration"] == pytest.approx(
+        adaptive.operating_characteristics(0.7).expected_duration
+    )
+
+
+def _ssr_design():
+    return survival_ssr(_study(), events=248, n_total=600).design
+
+
+def test_cli_ssr_survival_text_simulation_and_report(tmp_path: Path):
+    result = runner.invoke(app, ["ssr", *SURV, "--nsim", "2000", "--seed", "1"])
+    assert result.exit_code == 0, result.output
+    assert "event re-estimation" in result.output and "Total events" in result.output
+    assert "Simulated checks" in result.output
+    result = runner.invoke(app, ["ssr", *SURV, "--extend", "accrual", "--nsim", "100"])
+    assert result.exit_code == 2 and "followup" in result.output
+    result = runner.invoke(app, ["report", *SURV, "--cp-min", "0.36", "--out", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    md = (tmp_path / "report.md").read_text()
+    assert "## Event re-estimation" in md and "Bauer and Posch" in md
+    assert (tmp_path / "ssr.png").exists()
+
+
+def test_cli_extend_is_for_survival_only():
+    result = runner.invoke(
+        app, ["ssr", "--endpoint", "normal", "--delta", "0.3", "--sd", "1", "--extend", "accrual"]
+    )
+    assert result.exit_code == 2 and "survival" in result.output
+    result = runner.invoke(app, ["ssr", *SURV, "--extend", "later"])
+    assert result.exit_code == 2 and "extend must be" in result.output

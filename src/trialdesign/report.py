@@ -421,11 +421,43 @@ def _ssr_oc_dict(oc: ssr.SSROperatingCharacteristics, n_max: float) -> Summary:
     }
 
 
+def _ssr_sim_dict(x: Any, drift: float, n_max: float, survival: ssr.SurvivalSSR | None) -> Summary:
+    common = {
+        "nsim": x.n_sim,
+        "seed": x.seed,
+        "reject_prob": x.reject_prob,
+        "reject_prob_se": x.reject_prob_se,
+        "reject_prob_naive": x.reject_prob_naive,
+        "reject_prob_naive_se": x.reject_prob_naive_se,
+        "prob_zone": dict(x.prob_zone),
+    }
+    if survival is None:
+        return {
+            "effect_ratio": x.drift / drift,
+            **common,
+            "expected_n_total": x.expected_n_fraction * n_max,
+            "expected_n_total_se": x.expected_n_fraction_se * n_max,
+        }
+    return {
+        "effect_ratio": math.log(x.hazard_ratio) / math.log(survival.study.hazard_ratio),
+        "engine": "patient",
+        **common,
+        "expected_n_total": x.expected_events,
+        "expected_n_total_se": x.expected_events_se,
+        "expected_duration": x.expected_duration,
+        "expected_duration_se": x.expected_duration_se,
+        "expected_patients": x.expected_patients,
+        "expected_patients_se": x.expected_patients_se,
+        "events_not_reached": x.events_not_reached,
+    }
+
+
 def ssr_summary(
     planned: Summary,
     design: ssr.SSRDesign,
     z1: float | None = None,
-    sim: Sequence[ssr.SSRSimulation] | None = None,
+    sim: Sequence[Any] | None = None,
+    survival: ssr.SurvivalSSR | None = None,
 ) -> Summary:
     """Promising-zone sample size re-estimation as a dictionary.
 
@@ -438,39 +470,63 @@ def ssr_summary(
     z1 : float, optional
         Observed interim z-statistic: adds the conditional power, the zone and the
         re-estimated sample size.
-    sim : sequence of SSRSimulation, optional
+    sim : sequence of SSRSimulation or SurvivalSSRSimulation, optional
         Simulations under H0 (futility ignored) and the design alternative, as checks.
+    survival : SurvivalSSR, optional
+        Required for a survival design (``planned`` in events): the events are re-estimated,
+        and the expected study duration and patients are added.
 
     Returns
     -------
     dict
-        Sample sizes are in patients: the planned maximum ``n_planned``, the cap
-        ``n_cap``, and expected totals. ``exact`` holds the type I error (CHW and naive
+        Sample sizes are in ``unit``, patients or events: the planned maximum ``n_planned``,
+        the cap ``n_cap``, and expected totals. ``exact`` holds the type I error (CHW and naive
         tests, futility ignored) and, for each true effect in :data:`SSR_EFFECTS` as a
         fraction of the design effect, the adaptive and the planned design's power and
         expected sample size (futility followed).
     """
     size = planned["sample_size"]
-    if size["unit"] != "patients":
-        raise ValueError("sample size re-estimation is for normal and binary endpoints")
-    n_max = size["max_n_total_ceil"]
-    n1 = size["look_total_ceil"][0]
-    n_cap = _ceil(n_max * design.max_factor)
+    unit = size["unit"]
+    if (unit == "events") != (survival is not None):
+        raise ValueError("a survival design needs survival=SurvivalSSR, and only it does")
+    if survival is not None:
+        n_max, n1, n_cap = survival.events, survival.interim_events, survival.max_events
+        hr_design = survival.study.hazard_ratio
+    else:
+        n_max = size["max_n_total_ceil"]
+        n1 = size["look_total_ceil"][0]
+        n_cap = _ceil(n_max * design.max_factor)
     drift = design.gsd.drift
+
+    def oc_at(theta: float, use_futility: bool = True, test: ssr.Test = "chw") -> Summary:
+        if survival is None:
+            return _ssr_oc_dict(
+                design.operating_characteristics(theta * drift, use_futility, test), n_max
+            )
+        o = survival.operating_characteristics(hr_design**theta, use_futility, test)
+        return {
+            "reject_prob": o.reject_prob,
+            "prob_efficacy_interim": o.prob_efficacy_interim,
+            "prob_futility_interim": o.prob_futility_interim,
+            "prob_zone": dict(o.prob_zone),
+            "expected_n_total": o.expected_events,
+            "expected_duration": o.expected_duration,
+            "expected_patients": o.expected_patients,
+        }
+
     zones = {
         "cp_min": design._z_at_cp(design.cp_min),
         "cp_target": design._z_at_cp(design.cp_target),
     }
-    h0 = design.operating_characteristics(0.0, use_futility=False)
+    h0 = oc_at(0.0, use_futility=False)
     h0_naive = design.operating_characteristics(0.0, use_futility=False, test="naive")
     effects = []
     for theta in SSR_EFFECTS:
-        oc = design.operating_characteristics(theta * drift)
         eff, _ = design.gsd.crossing_probabilities(theta * drift)
         effects.append(
             {
                 "effect_ratio": theta,
-                **_ssr_oc_dict(oc, n_max),
+                **oc_at(theta),
                 "planned_reject_prob": float(eff.sum()),
                 "planned_expected_n_total": design.gsd.expected_info_fraction(theta * drift)
                 * n_max,
@@ -478,6 +534,7 @@ def ssr_summary(
         )
     out: Summary = {
         "planned": planned,
+        "unit": unit,
         "interim_fraction": design.t1,
         "cp_min": design.cp_min,
         "cp_target": design.cp_target,
@@ -493,9 +550,9 @@ def ssr_summary(
             k: None if z is None else z / math.sqrt(design.t1) / drift for k, z in zones.items()
         },
         "exact": {
-            "type_i_error": h0.reject_prob,
+            "type_i_error": h0["reject_prob"],
             "type_i_error_naive": h0_naive.reject_prob,
-            "h0": _ssr_oc_dict(h0, n_max),
+            "h0": h0,
             "effects": effects,
         },
     }
@@ -503,7 +560,12 @@ def ssr_summary(
         m = float(design.stage2_multiplier(z1))
         zone = str(design.zone(z1))
         n2_planned = n_max - n1
-        n_total = n1 if zone in ("efficacy", "futility") else n1 + _ceil(m * n2_planned)
+        if zone in ("efficacy", "futility"):
+            n_total = n1
+        elif survival is not None:
+            n_total = int(survival.total_events(z1))
+        else:
+            n_total = n1 + _ceil(m * n2_planned)
         out["interim"] = {
             "z1": z1,
             "zone": zone,
@@ -514,22 +576,26 @@ def ssr_summary(
             "n_total": n_total,
             "cp_observed_after": float(design.conditional_power(z1, m=m)),
         }
+        if survival is not None:
+            # the rule's events, rounded up and capped: CP after uses the events actually set
+            m_events = (n_total - n1) / n2_planned
+            out["interim"]["stage2_multiplier"] = m_events
+            out["interim"]["cp_observed_after"] = float(design.conditional_power(z1, m=m_events))
+            time, patients = survival.final_analysis(n_total)
+            out["interim"]["expected_duration"] = time
+            out["interim"]["expected_patients"] = patients
+    if survival is not None:
+        out["survival"] = {
+            "hazard_ratio": hr_design,
+            "n_total": survival.n_total,
+            "extend": survival.extend,
+            "interim_time": survival.time_of_events(n1),
+            "planned_duration": survival.time_of_events(n_max),
+            "cap_duration": survival.final_analysis(n_cap)[0],
+            "cap_patients": survival.final_analysis(n_cap)[1],
+        }
     if sim:
-        out["simulation"] = [
-            {
-                "effect_ratio": x.drift / drift,
-                "nsim": x.n_sim,
-                "seed": x.seed,
-                "reject_prob": x.reject_prob,
-                "reject_prob_se": x.reject_prob_se,
-                "reject_prob_naive": x.reject_prob_naive,
-                "reject_prob_naive_se": x.reject_prob_naive_se,
-                "expected_n_total": x.expected_n_fraction * n_max,
-                "expected_n_total_se": x.expected_n_fraction_se * n_max,
-                "prob_zone": dict(x.prob_zone),
-            }
-            for x in sim
-        ]
+        out["simulation"] = [_ssr_sim_dict(x, drift, n_max, survival) for x in sim]
     return out
 
 
@@ -542,6 +608,7 @@ def ssr_tables(s: Summary, markdown: bool = False) -> list[str]:
     zl, zh = s["zone_z1"]["cp_min"], s["zone_z1"]["cp_target"]
     el, eh = s["zone_effect_ratio"]["cp_min"], s["zone_effect_ratio"]["cp_target"]
     lo_txt = "-inf" if s["b1"] is None else f"{s['b1']:.3f}"
+    noun = s.get("unit", "patients")
     zone_rows: list[list[Any]] = []
     if s["b1"] is not None:
         zone_rows.append(["Futility (stop)", f"< {lo_txt}", "", s["n_interim"]])
@@ -557,9 +624,11 @@ def ssr_tables(s: Summary, markdown: bool = False) -> list[str]:
         ["Efficacy (stop)", f">= {s['c1']:.3f}", "", s["n_interim"]],
     ]
     zones = format_table(
-        ["Zone", "Interim z1", "Observed / design effect", "Total patients"], zone_rows, markdown
+        ["Zone", "Interim z1", "Observed / design effect", f"Total {noun}"], zone_rows, markdown
     )
     ex = s["exact"]
+    surv = "survival" in s
+    naive_test = "naive log-rank" if surv else "naive pooled test"
     rows: list[list[Any]] = [
         [
             "H0 (futility ignored), CHW test",
@@ -568,8 +637,9 @@ def ssr_tables(s: Summary, markdown: bool = False) -> list[str]:
             ex["h0"]["expected_n_total"],
             "",
             ex["h0"]["prob_zone"]["promising"],
+            *([ex["h0"]["expected_duration"]] if surv else []),
         ],
-        ["H0, naive pooled test", ex["type_i_error_naive"], "", "", "", ""],
+        [f"H0, {naive_test}", ex["type_i_error_naive"], "", "", "", "", *([""] if surv else [])],
     ]
     for e in ex["effects"]:
         rows.append(
@@ -580,6 +650,7 @@ def ssr_tables(s: Summary, markdown: bool = False) -> list[str]:
                 e["expected_n_total"],
                 e["planned_expected_n_total"],
                 e["prob_zone"]["promising"],
+                *([e["expected_duration"]] if surv else []),
             ]
         )
     oc = format_table(
@@ -587,9 +658,10 @@ def ssr_tables(s: Summary, markdown: bool = False) -> list[str]:
             "Scenario",
             "P(reject) adaptive",
             "P(reject) planned",
-            "E[patients] adaptive",
-            "E[patients] planned",
+            f"E[{noun}] adaptive",
+            f"E[{noun}] planned",
             "P(promising)",
+            *(["E[duration] adaptive"] if surv else []),
         ],
         rows,
         markdown,
@@ -1100,10 +1172,12 @@ def plot_gsd_oc(
     return out
 
 
-def plot_ssr(design: ssr.SSRDesign, path: str | Path, n_planned: float) -> Path:
+def plot_ssr(
+    design: ssr.SSRDesign, path: str | Path, n_planned: float, unit: str = "patients"
+) -> Path:
     """The promising-zone rule and its effect on power, saved as PNG.
 
-    Left: total patients against the interim z-statistic, with the zones shaded. Right:
+    Left: total patients (or events) against the interim z-statistic, with the zones shaded. Right:
     power of the adaptive and the planned design against the true effect (futility
     followed), on the scale of the design effect.
     """
@@ -1136,7 +1210,7 @@ def plot_ssr(design: ssr.SSRDesign, path: str | Path, n_planned: float) -> Path:
         ax1.axvline(design.b1, color=_MUTED, linewidth=0.8, linestyle=":")
     ax1.plot(z, n_tot, color=_BLUE, linewidth=2)
     ax1.set_xlabel("Interim z-statistic")
-    ax1.set_ylabel("Total patients")
+    ax1.set_ylabel(f"Total {unit}")
     ax1.set_ylim(0, n_planned * design.max_factor * 1.12)
     ax1.set_title("Re-estimated sample size", loc="left", fontsize=11, color=_INK)
     theta = np.linspace(0.0, 1.5, 31)
@@ -1418,21 +1492,47 @@ def ssr_markdown(s: Summary, plots: bool = True) -> str:
     zones, oc, *sim = ssr_tables(s, markdown=True)
     ex = s["exact"]
     first = ex["effects"][0]
+    noun = s.get("unit", "patients")
+    what = "number of events" if noun == "events" else "sample size"
     parts = [
-        "## Sample size re-estimation",
+        "## Event re-estimation" if noun == "events" else "## Sample size re-estimation",
         f"At the interim ({s['interim_fraction']:.2f} of the planned information, "
-        f"{s['n_interim']} patients), the conditional power at the observed trend decides the "
+        f"{s['n_interim']} {noun}), the conditional power at the observed trend decides the "
         f"second stage. In the promising zone (conditional power {s['cp_min']:g} to "
-        f"{s['cp_target']:g}) the sample size is raised to reach {s['cp_target']:g}, up to "
-        f"{s['n_cap']} patients ({s['max_factor']:g} times the planned {s['n_planned']}). "
-        "Elsewhere the planned sample size is kept (Mehta and Pocock 2011).",
+        f"{s['cp_target']:g}) the {what} is raised to reach {s['cp_target']:g}, up to "
+        f"{s['n_cap']} {noun} ({s['max_factor']:g} times the planned {s['n_planned']}). "
+        f"Elsewhere the planned {what} is kept (Mehta and Pocock 2011).",
         zones,
+    ]
+    if "survival" in s:
+        sv = s["survival"]
+        how = (
+            f"following the {sv['n_total']} enrolled patients longer"
+            if sv["extend"] == "followup"
+            else "extending accrual at its last rate, with the planned minimum follow-up"
+        )
+        parts.append(
+            f"The extra events are found by {how}: at the design hazard ratio the planned "
+            f"final analysis is at {sv['planned_duration']:.1f} months and the capped one at "
+            f"{sv['cap_duration']:.1f} months ({sv['cap_patients']:.0f} patients). The stage-2 "
+            "statistic is the log-rank score increment between the analyses, which has "
+            "independent increments (Tsiatis 1981). That holds only if the interim decision "
+            "uses the log-rank statistic alone: using other stage-1 data (progression, "
+            "biomarkers) can inflate the type I error (Bauer and Posch 2004; Jenkins, Stone "
+            "and Jennison 2011)."
+        )
+    pooled = (
+        "The naive log-rank test over all events"
+        if noun == "events"
+        else ("Pooling all patients instead")
+    )
+    parts += [
         "The final test weights the stages by their *planned* information (Cui, Hung and Wang "
         f"1999), so the type I error stays at {ex['type_i_error']:.4f} whatever the interim "
-        f"result. Pooling all patients instead gives {ex['type_i_error_naive']:.4f}. At the "
+        f"result. {pooled} gives {ex['type_i_error_naive']:.4f}. At the "
         f"design effect the adaptive design has power {first['reject_prob']:.3f} "
         f"(planned {first['planned_reject_prob']:.3f}) with "
-        f"{first['expected_n_total']:.0f} expected patients "
+        f"{first['expected_n_total']:.0f} expected {noun} "
         f"(planned {first['planned_expected_n_total']:.0f}). Exact values, by integration over "
         "the interim z-statistic:",
         oc,
@@ -1445,7 +1545,7 @@ def ssr_markdown(s: Summary, plots: bool = True) -> str:
             f"**Observed interim z = {i['z1']:.3f}** (observed effect "
             f"{i['observed_effect_ratio']:.2f} x design): {i['zone']} zone, conditional power "
             f"{i['cp_observed']:.3f} at the observed trend ({i['cp_design']:.3f} at the design "
-            f"effect). Total patients: {i['n_total']}; conditional power at the observed "
+            f"effect). Total {noun}: {i['n_total']}; conditional power at the observed "
             f"trend after re-estimation {i['cp_observed_after']:.3f}."
         )
     if plots:
@@ -1509,7 +1609,7 @@ def write_report(
         parts.append(gsd_markdown(s, sim))
     if ssr_design is not None:
         sd, ss = ssr_design
-        written.append(plot_ssr(sd, out / "ssr.png", ss["n_planned"]))
+        written.append(plot_ssr(sd, out / "ssr.png", ss["n_planned"], ss.get("unit", "patients")))
         parts.append(ssr_markdown(ss))
     if bayes_design is not None:
         bd, s, sim = bayes_design

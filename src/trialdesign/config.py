@@ -29,11 +29,13 @@ A design file has up to six tables. Every key has a command-line flag of the sam
     seed = 2026
     engine = "score"           # or "patient": simulate patients (default nsim 10000)
 
-    [adaptation]      # sample size re-estimation at one interim (normal and binary)
+    [adaptation]      # sample size (survival: event) re-estimation at one interim
     interim_fraction = 0.5
     cp_min = 0.36              # promising zone: cp_min <= CP at the observed trend < cp_target
     cp_target = 0.80
-    max_factor = 2.0           # cap on total patients, as a multiple of the planned maximum
+    max_factor = 2.0           # cap on total patients or events, as a multiple of the planned
+                               # maximum (default 2; 1.5 for survival)
+    extend = "followup"        # survival: find extra events by "followup" or "accrual"
 
     [bayes]           # Bayesian go/no-go interim for a binary endpoint
     pc = 0.30
@@ -77,7 +79,9 @@ SECTIONS: dict[str, frozenset[str]] = {
         {"median_control", "accrual_time", "accrual_rate", "followup", "dropout", "dropout_time"}
     ),
     "simulation": frozenset({"nsim", "seed", "engine"}),
-    "adaptation": frozenset({"interim_fraction", "cp_min", "cp_target", "max_factor", "z1"}),
+    "adaptation": frozenset(
+        {"interim_fraction", "cp_min", "cp_target", "max_factor", "z1", "extend"}
+    ),
     "bayes": frozenset(
         {
             "pc",
