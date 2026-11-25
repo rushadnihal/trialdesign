@@ -27,6 +27,7 @@ A design file has up to six tables. Every key has a command-line flag of the sam
     [simulation]
     nsim = 200000
     seed = 2026
+    engine = "score"           # or "patient": simulate patients (default nsim 10000)
 
     [adaptation]      # sample size re-estimation at one interim (normal and binary)
     interim_fraction = 0.5
@@ -75,7 +76,7 @@ SECTIONS: dict[str, frozenset[str]] = {
     "accrual": frozenset(
         {"median_control", "accrual_time", "accrual_rate", "followup", "dropout", "dropout_time"}
     ),
-    "simulation": frozenset({"nsim", "seed"}),
+    "simulation": frozenset({"nsim", "seed", "engine"}),
     "adaptation": frozenset({"interim_fraction", "cp_min", "cp_target", "max_factor", "z1"}),
     "bayes": frozenset(
         {

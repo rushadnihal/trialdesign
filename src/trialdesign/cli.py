@@ -18,9 +18,10 @@ from typing import Annotated, Any, cast
 import numpy as np
 import typer
 
-from trialdesign import __version__, bayes, config, fixed, report, ssr
+from trialdesign import __version__, accrual, bayes, config, fixed, report, ssr
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
-from trialdesign.simulate import simulate_design
+from trialdesign.patients import simulate_design_patients
+from trialdesign.simulate import DesignSimulation, simulate_design
 from trialdesign.spending import parse_spending
 
 app = typer.Typer(
@@ -156,6 +157,13 @@ BindingOpt = Annotated[
 ]
 NsimOpt = Annotated[int | None, typer.Option(help="Number of simulated trials.")]
 SeedOpt = Annotated[int | None, typer.Option(help="Random seed; drawn and printed if omitted.")]
+EngineOpt = Annotated[
+    str | None,
+    typer.Option(
+        help="Simulation engine: 'score' (canonical z-scale process, fast) or 'patient' "
+        "(simulated patients and the real test statistic) [default: score]."
+    ),
+]
 NOpt = Annotated[
     int | None, typer.Option("--n", help="Bayes: control patients at the final analysis.")
 ]
@@ -416,6 +424,63 @@ def _simulation_settings(cfg: config.Config, flags: dict[str, Any], default_nsim
     if nsim is None:
         return None, None
     return _whole(nsim, "nsim"), _seed(sim.get("seed"))
+
+
+def _engine(cfg: config.Config, flags: dict[str, Any]) -> str:
+    engine = str(config.merge(cfg, "simulation", flags).get("engine", "score"))
+    if engine not in ("score", "patient"):
+        raise ValueError(f'engine must be "score" or "patient", got {engine!r}')
+    return engine
+
+
+def _patient_simulation(
+    inp: _DesignInputs, gsd: GroupSequentialDesign, s: dict[str, Any], n_sim: int, seed: int
+) -> DesignSimulation:
+    """Patient-level H0 and H1 simulation of a group-sequential design built by the CLI."""
+    size, eff = s["sample_size"], inp.effect
+    if inp.endpoint == "normal":
+        return simulate_design_patients(
+            gsd,
+            "normal",
+            n_control=size["max_n_control_ceil"],
+            n_treatment=size["max_n_treatment_ceil"],
+            delta=eff["delta"],
+            sd=eff["sd"],
+            delta0=eff.get("delta0", 0.0),
+            n_sim=n_sim,
+            seed=seed,
+        )
+    if inp.endpoint == "binary":
+        return simulate_design_patients(
+            gsd,
+            "binary",
+            n_control=size["max_n_control_ceil"],
+            n_treatment=size["max_n_treatment_ceil"],
+            p_control=eff["pc"],
+            p_treatment=eff["pt"],
+            delta0=eff.get("delta0", 0.0),
+            n_sim=n_sim,
+            seed=seed,
+        )
+    if eff.get("hr0", 1.0) != 1.0:
+        raise ValueError("the patient engine simulates survival superiority only (hr0 = 1)")
+    if "accrual_inputs" not in eff:
+        raise ValueError(
+            "the patient engine needs an accrual model for survival: give --median-control "
+            "and two of --accrual-time, --accrual-rate and --followup"
+        )
+    study = accrual.survival_study(
+        size["max_events"], eff["hr"], allocation=inp.allocation, **eff["accrual_inputs"]
+    )
+    return simulate_design_patients(
+        gsd,
+        "survival",
+        study=study,
+        n_total=size["max_n_total_ceil"],
+        events=size["max_events_ceil"],
+        n_sim=n_sim,
+        seed=seed,
+    )
 
 
 def _resolve_bayes(cfg: config.Config, flags: dict[str, Any]):
@@ -751,15 +816,20 @@ def simulate(
     efficacy: EfficacyOpt = None,
     futility: FutilityOpt = None,
     binding_futility: BindingOpt = None,
-    nsim: Annotated[int | None, typer.Option(help="Simulated trials [default: 100000].")] = None,
+    nsim: Annotated[
+        int | None,
+        typer.Option(help="Simulated trials [default: 100000 score, 10000 patient]."),
+    ] = None,
     seed: SeedOpt = None,
+    engine: EngineOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Monte Carlo operating characteristics of a group-sequential design under H0 and H1.
 
     Type I error is simulated with futility ignored (non-binding) or followed (binding); power
     and expected sample size follow futility. Every estimate has a Monte Carlo SE and is shown
-    next to its exact value.
+    next to its exact value. --engine patient simulates patients and the real test (t-test,
+    Farrington-Manning z-test or log-rank) instead of the canonical z-scale process.
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
     try:
@@ -767,9 +837,14 @@ def simulate(
         inp = _resolve_design(cfg, flags)
         if inp.looks is None:
             raise ValueError("simulate needs a group-sequential design: give --looks")
-        n_sim, seed_used = _simulation_settings(cfg, flags, 100_000)
+        eng = _engine(cfg, flags)
+        n_sim, seed_used = _simulation_settings(cfg, flags, 100_000 if eng == "score" else 10_000)
         gsd, s = _sequential(inp)
-        sim = report.simulation_summary(simulate_design(gsd, n_sim, seed_used), _n_max(s))
+        if eng == "score":
+            design_sim = simulate_design(gsd, n_sim, seed_used)
+        else:
+            design_sim = _patient_simulation(inp, gsd, s, n_sim, seed_used)
+        sim = {**report.simulation_summary(design_sim, _n_max(s)), "engine": eng}
     except ValueError as exc:
         raise _fail(exc) from exc
     if as_json:
@@ -777,7 +852,7 @@ def simulate(
         return
     typer.echo(
         f"trialdesign {__version__} | seed {seed_used} | {n_sim:,} simulated trials | "
-        "alpha is one-sided"
+        f"{eng} engine | alpha is one-sided"
     )
     _print_sequential(s, sim)
 
