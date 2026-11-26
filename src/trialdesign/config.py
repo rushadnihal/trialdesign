@@ -1,6 +1,6 @@
 """Design files: read a TOML design and merge it with command-line flags.
 
-A design file has up to seven tables. Every key has a command-line flag of the same name
+A design file has up to eight tables. Every key has a command-line flag of the same name
 (underscores become dashes), and a flag given on the command line overrides the file.
 
 .. code-block:: toml
@@ -52,6 +52,10 @@ A design file has up to seven tables. Every key has a command-line flag of the s
     n = 60
     interim = 30
 
+A ``[graph]`` table describes a graphical multiple test for ``trialdesign graph`` (keys
+``preset`` or ``weights`` and ``transitions``, ``names``, ``alpha_one_sided``, ``p``,
+``means``, ``correlation``); see ``examples/two_doses_graph.toml``.
+
 Sidedness is always named: use ``alpha_one_sided`` or ``alpha_two_sided``, never ``alpha``.
 """
 
@@ -89,6 +93,18 @@ SECTIONS: dict[str, frozenset[str]] = {
         {"median_control", "accrual_time", "accrual_rate", "followup", "dropout", "dropout_time"}
     ),
     "simulation": frozenset({"nsim", "seed", "engine", "test"}),
+    "graph": frozenset(
+        {
+            "preset",
+            "names",
+            "weights",
+            "transitions",
+            "alpha_one_sided",
+            "p",
+            "means",
+            "correlation",
+        }
+    ),
     "hazards": frozenset(
         {
             "delay",
