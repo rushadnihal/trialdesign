@@ -1,0 +1,29 @@
+# Phase 3 time-to-event trial sized under proportional hazards, then simulated with a
+# 4-month delayed treatment effect (HR 1 for 4 months after entry, then 0.70).
+# Run:  trialdesign simulate --config examples/phase3_survival_nph.toml
+#       trialdesign simulate --config examples/phase3_survival_nph.toml --delay 0   # PH check
+# One look with the weighted log-rank test:
+#       trialdesign simulate --config examples/phase3_survival_nph.toml --looks 1 --test fh:0,1
+
+[design]
+endpoint = "survival"
+hr = 0.70                 # design hazard ratio, used for the sample size
+alpha_one_sided = 0.025
+power = 0.80
+
+[accrual]                 # time in months
+median_control = 12.0
+accrual_time = 24
+followup = 12
+
+[sequential]
+looks = [0.5, 1.0]
+efficacy = "obf"
+
+[hazards]                 # the truth simulated by the patient engine
+delay = 4                 # HR 1 for 4 months, then hr_after (default: hr)
+
+[simulation]
+engine = "patient"
+nsim = 100000
+seed = 2026

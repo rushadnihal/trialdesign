@@ -1,6 +1,6 @@
 """Design files: read a TOML design and merge it with command-line flags.
 
-A design file has up to six tables. Every key has a command-line flag of the same name
+A design file has up to seven tables. Every key has a command-line flag of the same name
 (underscores become dashes), and a flag given on the command line overrides the file.
 
 .. code-block:: toml
@@ -28,6 +28,15 @@ A design file has up to six tables. Every key has a command-line flag of the sam
     nsim = 200000
     seed = 2026
     engine = "score"           # or "patient": simulate patients (default nsim 10000)
+    test = "logrank"           # survival, patient engine: or "fh:0,1" (one look only)
+
+    [hazards]         # survival, patient engine: simulate another event-time model
+    delay = 4                  # HR 1 for 4 months, then hr_after (default: hr); or
+    # waning = 12              # hr_after for 12 months, then HR 1; or
+    # hazard_times = [0, 4]    # piecewise hazards per arm, with
+    # hazards_control = [0.0578, 0.0578]
+    # hazards_treatment = [0.0578, 0.0404]; or
+    # kappa = 1.5              # Weibull events with the control median and a constant HR
 
     [adaptation]      # sample size (survival: event) re-estimation at one interim
     interim_fraction = 0.5
@@ -79,7 +88,18 @@ SECTIONS: dict[str, frozenset[str]] = {
     "accrual": frozenset(
         {"median_control", "accrual_time", "accrual_rate", "followup", "dropout", "dropout_time"}
     ),
-    "simulation": frozenset({"nsim", "seed", "engine"}),
+    "simulation": frozenset({"nsim", "seed", "engine", "test"}),
+    "hazards": frozenset(
+        {
+            "delay",
+            "waning",
+            "hr_after",
+            "hazard_times",
+            "hazards_control",
+            "hazards_treatment",
+            "kappa",
+        }
+    ),
     "adaptation": frozenset(
         {"interim_fraction", "cp_min", "cp_target", "max_factor", "z1", "extend"}
     ),
