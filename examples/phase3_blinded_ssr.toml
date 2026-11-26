@@ -1,0 +1,27 @@
+# Blinded sample size re-estimation (Kieser and Friede 2003) for a normal endpoint.
+#
+#   trialdesign ssr --config examples/phase3_blinded_ssr.toml
+#
+# Planned with SD 10 for a difference of 5 (63 per arm at one-sided 0.025 and 80% power).
+# After 60 patients the SD is re-estimated from the pooled, still blinded data, and the
+# sample size recomputed between the planned 63 and twice that per arm. The pilot's
+# one-sample SD came out at 12, so the trial grows to 91 per arm.
+
+[design]
+endpoint = "normal"
+delta = 5.0
+sd = 10.0
+alpha_one_sided = 0.025
+power = 0.80
+
+[adaptation]
+blinded = true
+pilot_n = 60
+pilot_sd = 12.0
+sd_adjusted = false
+floor = "planned"
+max_factor = 2.0
+
+[simulation]
+nsim = 100000
+seed = 2026

@@ -143,8 +143,31 @@ trialdesign design --endpoint normal --delta 0 --sd 1 --margin 0.5 --alpha-two-s
 Power counts both tests on the same estimate. For a normal endpoint (known SD) it is exact, and
 with a zero true difference the sample size is the closed form with z_(1-beta/2). For a binary
 endpoint each test uses the Farrington-Manning variance at its margin; simulation of the actual
-tests shows the formula is conservative by up to half a point of power. Equivalence designs are
-fixed (no `--looks`).
+tests shows the formula is conservative by up to half a point of power.
+
+With `--looks` the equivalence design is group-sequential (Jennison and Turnbull 2000,
+chapter 6): each one-sided test spends `--alpha-one-sided` (default 0.025) with the
+`--efficacy` spending function, and equivalence is declared at the first look where both
+reject, that is where the repeated confidence interval lies inside the margins. There is no
+futility stop. With one look it is the fixed design above (to 1e-6):
+
+```bash
+trialdesign design --endpoint normal --delta 0 --sd 1 --margin 0.5 --looks 3 --power 0.9
+# 106 per arm at most (fixed TOST: 104), 93 expected at zero difference
+```
+
+```text
+Look    Info  n C  n T     c_k  RCI +/-   P(eq)  P(eq) at lo  P(eq) at hi
+1     0.3333   36   36  3.7103   0.8864  0.0000       0.0000       0.0000
+2     0.6667   71   71  2.5114   0.4242  0.3462       0.0057       0.0057
+3     1.0000  106  106  1.9930   0.2749  0.5538       0.0193       0.0193
+```
+
+Per look the table gives the sizes, the critical value, the half-width of the repeated
+confidence interval at the planned size and the probability of declaring equivalence at the
+design difference and at each margin (at most alpha). In Python:
+`equivalence.group_sequential_equivalence_normal` (or `_binary`), whose `simulate` checks the
+probabilities with patient-level means.
 
 ### Inference at the end of the trial
 
@@ -207,6 +230,36 @@ alpha for this promising-zone rule (0.0244), but not for a rule that adapts in e
 (0.0303 with `--cp-min 0`), which is why the weighted test is always used.
 
 ![Re-estimated sample size against the interim z, and power curves](https://raw.githubusercontent.com/rushadnihal/trialdesign/main/docs/img/ssr.png)
+
+#### Blinded re-estimation of the SD
+
+`trialdesign ssr --blinded` (normal endpoint, fixed design) re-estimates the SD from an
+internal pilot of `--pilot-n` patients **without unblinding** (Kieser and Friede 2003): the
+one-sample variance of the pooled pilot data, optionally minus its bias at the design
+difference (`--sd-adjusted`). The sample size is recomputed with the usual formula, kept
+between the planned size (`--floor planned`, the default; or `--floor pilot`) and
+`--max-factor` times it, and the final one-sided t-test uses all patients. Type I error,
+power and the sample size distribution are simulated for true SDs of 0.75 to 1.5 times the
+planning SD; `--pilot-sd` applies the rule to an observed pilot
+([`examples/phase3_blinded_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_blinded_ssr.toml)):
+
+```bash
+trialdesign ssr --config examples/phase3_blinded_ssr.toml
+```
+
+```text
+True SD  Type I error   Power  Mean N  N 5%-95%  P(N at cap)
+7.5000         0.0247  0.9604   126.0   126-126       0.0000
+10.0000        0.0255  0.8259   140.5   126-178     8.00e-05
+12.5000        0.0247  0.7947   203.0   148-252       0.1153
+15.0000        0.0254  0.7380   245.6   210-252       0.7684
+
+Pilot SD 12: variance used 144.0000; n_control 91, n_treatment 91, total 182
+```
+
+Planned for SD 10, the trial keeps about 80% power when the SD is really 12.5 (a fixed
+design of 126 would have about 61%), until the cap of twice the planned size binds; the type
+I error stays at alpha within simulation error. In Python: `trialdesign.blinded.BlindedSSR`.
 
 ### Spending functions and binding futility
 
@@ -278,10 +331,10 @@ patient-level check is the better guide.
 
 | Command | Does |
 | --- | --- |
-| `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics; `--margin` for equivalence, `--analyse` for inference from observed z |
+| `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics; `--margin` for equivalence (group-sequential with `--looks`), `--analyse` for inference from observed z |
 | `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test, and for survival `--delay`, `--waning`, `--hazard-times` or `--kappa` simulate another event-time model and `--test fh:0,1` the weighted log-rank test |
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
-| `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z |
+| `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z; `--blinded` re-estimates the SD from an internal pilot |
 | `trialdesign graph` | Graphical multiple test: rejections, adjusted p-values and the path for observed p-values (`--p`), and power for given z-means and correlation (`--means`) |
 | `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics; `--engine patient` adds a patient-level check, `--analyse` an inference section |
 
@@ -484,6 +537,8 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Patient-level simulation under non-proportional hazards and Weibull events: power, type I error, per-look stopping, look times, duration, expected patients and events | `rpact::getSimulationSurvival` with `piecewiseSurvivalTime` or `kappa` (100,000 runs) | 4 | 2 MC SE (power), 3 MC SE (per look, calendar) |
 | Graphical multiple testing: rejections and adjusted p-values (Bonferroni, Holm, fixed-sequence, fallback, two-dose and general graphs) | Closed test of weighted Bonferroni tests implemented in R; Holm also `stats::p.adjust` | 35 | exact / 1e-12 |
 | Power of a graph: per hypothesis, at least one, all, expected rejections (including the global-null FWER) | Exact integration with `mvtnorm::pmvnorm` | 5 | 2 MC SE (at least one), 3 MC SE (per hypothesis, all) |
+| Blinded SD re-estimation: re-estimated sizes; type I error, power and mean sample size (one-sample and bias-adjusted variance, floor at planned or pilot, 2:1) | Patient-level simulation in R (200,000 runs), t statistic checked against `stats::t.test` | 24 + 11 | exact; 3 SE of the difference |
+| Group-sequential equivalence: critical values, sample size, per-look probability of declaring equivalence at the design difference and at both margins (normal and binary, OBF and Pocock) | `rpact::getDesignGroupSequential` and `mvtnorm::pmvnorm` rectangles; Farrington-Manning by numerical maximisation | 7 | 1e-6 (probabilities), 1e-5 (sample size) |
 | Fleming-Harrington FH(rho, gamma) weighted log-rank statistic | Computed in R; FH(rho, 0) also `survival::survdiff(rho = ...)` | 15 | 1e-10 |
 
 Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
@@ -518,6 +573,8 @@ Rscript tests/r/ssr_survival_reference_values.R > ssr.json && mv ssr.json tests/
 Rscript tests/r/inference_reference_values.R > inf.json && mv inf.json tests/inference_reference_values.json
 Rscript tests/r/nph_reference_values.R > nph.json && mv nph.json tests/nph_reference_values.json
 Rscript tests/r/multiplicity_reference_values.R > mult.json && mv mult.json tests/multiplicity_reference_values.json
+Rscript tests/r/blinded_reference_values.R > blinded.json && mv blinded.json tests/blinded_reference_values.json
+Rscript tests/r/gs_equivalence_reference_values.R > gseq.json && mv gseq.json tests/gs_equivalence_reference_values.json
 ```
 
 ## Development
@@ -538,8 +595,7 @@ when a `v*` tag is pushed; see [RELEASING.md](https://github.com/rushadnihal/tri
 The package is deliberately narrow: two arms and one primary endpoint. Not yet covered:
 
 - multi-arm, platform and basket trials;
-- group-sequential equivalence designs;
-- blinded sample size re-estimation, and enrichment designs;
+- enrichment designs, and blinded re-estimation for binary and survival endpoints;
 - group-sequential graphical testing (Maurer and Bretz 2013), and Simes or parametric tests
   inside a graph;
 - response-adaptive randomisation;

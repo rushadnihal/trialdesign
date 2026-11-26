@@ -32,7 +32,16 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
 
-from trialdesign import accrual, bayes, equivalence, fixed, inference, multiplicity, ssr
+from trialdesign import (
+    accrual,
+    bayes,
+    blinded,
+    equivalence,
+    fixed,
+    inference,
+    multiplicity,
+    ssr,
+)
 from trialdesign.boundaries import (
     GroupSequentialDesign,
     crossing_probabilities,
@@ -159,6 +168,205 @@ def _equivalence_summary(
         "n_treatment_ceil": res.n_treatment_ceil,
         "n_total_ceil": res.n_total_ceil,
     }
+
+
+def gs_equivalence_summary(
+    endpoint: str,
+    margin: float | Sequence[float],
+    info_rates: int | Sequence[float],
+    *,
+    delta: float | None = None,
+    sd: float | None = None,
+    pc: float | None = None,
+    pt: float | None = None,
+    alpha_one_sided: float = 0.025,
+    power: float = 0.80,
+    allocation: float = 1.0,
+    spending: str = "obf",
+) -> Summary:
+    r"""Group-sequential equivalence (:class:`~trialdesign.equivalence.GroupSequentialEquivalence`).
+
+    ``alpha_one_sided`` is the level of each one-sided test. Per look: the sizes, the
+    half-width :math:`c_k \sigma_1 / \sqrt{n_k}` of the repeated confidence interval, and the
+    probability of declaring equivalence at the design difference and at each margin.
+    """
+    lo, hi = equivalence._margins(margin)
+    if endpoint == "normal":
+        assert delta is not None and sd is not None
+        g = equivalence.group_sequential_equivalence_normal(
+            (lo, hi), sd, info_rates, delta, alpha_one_sided, power, allocation, spending
+        )
+        inputs: Summary = {"delta": delta, "sd": sd, "method": "z"}
+    elif endpoint == "binary":
+        assert pc is not None and pt is not None
+        g = equivalence.group_sequential_equivalence_binary(
+            pc, pt, (lo, hi), info_rates, alpha_one_sided, power, allocation, spending
+        )
+        inputs = {"p_control": pc, "p_treatment": pt}
+    else:
+        raise ValueError("equivalence (--margin) is for normal and binary endpoints")
+    p_design = g.stopping_probabilities()
+    p_lo = g.stopping_probabilities(lo)
+    p_hi = g.stopping_probabilities(hi)
+    n_c = g.look_n_control()
+    looks = []
+    for k in range(g.n_looks):
+        looks.append(
+            {
+                "look": k + 1,
+                "info_rate": float(g.info_rates[k]),
+                "n_control": float(n_c[k]),
+                "n_treatment": float(allocation * n_c[k]),
+                "n_control_ceil": _ceil(n_c[k]),
+                "n_treatment_ceil": _ceil(allocation * n_c[k]),
+                "critical_value": float(g.critical_values[k]),
+                "ci_halfwidth": float(g.critical_values[k] * g.sd_estimate / math.sqrt(n_c[k])),
+                "prob_equivalence": float(p_design[k]),
+                "prob_equivalence_at_lower_margin": float(p_lo[k]),
+                "prob_equivalence_at_upper_margin": float(p_hi[k]),
+            }
+        )
+    max_c, max_t = _ceil(g.n_control), _ceil(g.n_treatment)
+    return {
+        "endpoint": endpoint,
+        "design": "group_sequential_equivalence",
+        **inputs,
+        "margin": [lo, hi],
+        "alpha_each_test": alpha_one_sided,
+        "power": power,
+        "allocation": allocation,
+        "spending": g.spending,
+        "info_rates": _floats(g.info_rates),
+        "critical_values": _floats(g.critical_values),
+        "sample_size": {
+            "fixed_n_control": g.fixed_n_control,
+            "max_n_control": g.n_control,
+            "max_n_treatment": g.n_treatment,
+            "max_n_control_ceil": max_c,
+            "max_n_treatment_ceil": max_t,
+            "max_n_total_ceil": max_c + max_t,
+            "inflation_factor": g.inflation_factor,
+            "expected_n_control": g.expected_n_control(),
+            "expected_n_control_at_lower_margin": g.expected_n_control(lo),
+            "expected_n_control_at_upper_margin": g.expected_n_control(hi),
+        },
+        "prob_equivalence": float(p_design.sum()),
+        "prob_equivalence_at_lower_margin": float(p_lo.sum()),
+        "prob_equivalence_at_upper_margin": float(p_hi.sum()),
+        "looks": looks,
+    }
+
+
+def gs_equivalence_table(s: Summary, markdown: bool = False) -> str:
+    headers = [
+        "Look",
+        "Info",
+        "n C",
+        "n T",
+        "c_k",
+        "RCI +/-",
+        "P(eq)",
+        "P(eq) at lo",
+        "P(eq) at hi",
+    ]
+    rows = [
+        [
+            x["look"],
+            x["info_rate"],
+            x["n_control_ceil"],
+            x["n_treatment_ceil"],
+            x["critical_value"],
+            x["ci_halfwidth"],
+            x["prob_equivalence"],
+            x["prob_equivalence_at_lower_margin"],
+            x["prob_equivalence_at_upper_margin"],
+        ]
+        for x in s["looks"]
+    ]
+    return format_table(headers, rows, markdown)
+
+
+def blinded_summary(
+    design: blinded.BlindedSSR,
+    n_sim: int,
+    seed: int,
+    pilot_sd: float | None = None,
+    sd_values: Sequence[float] | None = None,
+) -> Summary:
+    """Blinded re-estimation: planned and bounded sizes, simulated OCs by true SD, interim."""
+    ocs = design.operating_characteristics(sd_values, n_sim, seed)
+    rows = []
+    for h0, h1 in ocs:
+        rows.append(
+            {
+                "true_sd": h0.sd,
+                "type_i_error": h0.rejection_rate,
+                "type_i_error_se": h0.rejection_se,
+                "power": h1.rejection_rate,
+                "power_se": h1.rejection_se,
+                "mean_n_total": h1.mean_n_total,
+                "n_total_p05": h1.n_total_quantiles[0],
+                "n_total_p50": h1.n_total_quantiles[1],
+                "n_total_p95": h1.n_total_quantiles[2],
+                "prob_at_cap": h1.prob_at_cap,
+                "mean_n_total_h0": h0.mean_n_total,
+            }
+        )
+    out: Summary = {
+        "design": "blinded_ssr",
+        "endpoint": "normal",
+        "delta": design.delta,
+        "sd": design.sd,
+        "alpha_one_sided": design.alpha_one_sided,
+        "power": design.power,
+        "allocation": design.allocation,
+        "pilot_n": int(design.pilot_n),
+        "pilot_control": design.pilot_control,
+        "pilot_treatment": design.pilot_treatment,
+        "sd_adjusted": design.adjusted,
+        "bias_correction": design.bias_correction if design.adjusted else 0.0,
+        "floor": design.floor,
+        "max_factor": design.max_factor,
+        "planned_n_control": design.planned_n_control,
+        "planned_n_total": design.planned_n_total,
+        "n_control_floor": design.n_control_floor,
+        "n_control_cap": design.n_control_cap,
+        "n_sim": int(n_sim),
+        "seed": seed,
+        "operating_characteristics": rows,
+    }
+    if pilot_sd is not None:
+        if not pilot_sd > 0:
+            raise ValueError("pilot_sd must be positive")
+        r = design.reestimate(pilot_sd**2)
+        out["interim"] = {
+            "pilot_sd": pilot_sd,
+            "variance_lumped": r.variance_lumped,
+            "variance_used": r.variance_used,
+            "n_control_required": r.n_control_required,
+            "n_control": r.n_control,
+            "n_treatment": r.n_treatment,
+            "n_total": r.n_total,
+            "at_floor": r.at_floor,
+            "at_cap": r.at_cap,
+        }
+    return out
+
+
+def blinded_table(s: Summary, markdown: bool = False) -> str:
+    headers = ["True SD", "Type I error", "Power", "Mean N", "N 5%-95%", "P(N at cap)"]
+    rows = [
+        [
+            r["true_sd"],
+            r["type_i_error"],
+            r["power"],
+            f"{r['mean_n_total']:.1f}",
+            f"{r['n_total_p05']:.0f}-{r['n_total_p95']:.0f}",
+            r["prob_at_cap"],
+        ]
+        for r in s["operating_characteristics"]
+    ]
+    return format_table(headers, rows, markdown)
 
 
 def fixed_summary(

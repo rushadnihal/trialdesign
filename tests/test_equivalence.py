@@ -152,8 +152,8 @@ def test_cli_design_margin():
     out = json.loads(result.output)
     assert out["margin"] == [-0.5, 0.5] and out["alpha_each_test"] == pytest.approx(0.05)
     assert out["n_control"] == pytest.approx(sample_size_equivalence_normal(0.5, 1.0).n_control)
-    result = runner.invoke(app, [*base, "--looks", "2"])
-    assert result.exit_code == 2 and "fixed designs" in result.output
+    result = runner.invoke(app, [*base, "--looks", "2"])  # M19: group-sequential equivalence
+    assert result.exit_code == 0 and "group-sequential equivalence" in result.output
     result = runner.invoke(app, [*base, "--delta0", "-0.1"])
     assert result.exit_code == 2 and "not both" in result.output
     result = runner.invoke(
