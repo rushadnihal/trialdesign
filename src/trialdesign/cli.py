@@ -9,7 +9,6 @@ prints the package version, so a result can be reproduced.
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -26,6 +25,7 @@ from trialdesign import (
     config,
     fixed,
     inference,
+    jsonout,
     multiplicity,
     report,
     ssr,
@@ -1100,13 +1100,19 @@ def _print_ssr(s: dict[str, Any]) -> None:
             )
 
 
-def _fail(exc: Exception) -> typer.Exit:
-    typer.echo(f"Error: {exc}", err=True)
-    return typer.Exit(code=2)
+_ERROR_CODE = 2  # exit status for invalid input
 
 
-def _print_json(payload: dict[str, Any]) -> None:
-    typer.echo(json.dumps({**payload, "version": __version__}, indent=2))
+def _fail(exc: Exception, as_json: bool = False) -> typer.Exit:
+    if as_json:
+        typer.echo(jsonout.error_dumps(str(exc), _ERROR_CODE), err=True)
+    else:
+        typer.echo(f"Error: {exc}", err=True)
+    return typer.Exit(code=_ERROR_CODE)
+
+
+def _print_json(command: str, payload: dict[str, Any]) -> None:
+    typer.echo(jsonout.dumps(command, payload, __version__))
 
 
 def _print_pairs(pairs: dict[str, Any]) -> None:
@@ -1261,9 +1267,9 @@ def design(
             if observed is not None:
                 out["analysis"] = _analysis(inp, gsd, _numbers(observed, "analyse"))
     except ValueError as exc:
-        raise _fail(exc) from exc
+        raise _fail(exc, as_json) from exc
     if as_json:
-        _print_json(out)
+        _print_json("design", out)
         return
     if out["design"] == "group_sequential_equivalence":
         typer.echo(
@@ -1362,9 +1368,9 @@ def simulate(
             sim["event_model"] = None if model is None else model.describe()
             sim["test"] = "logrank" if fh is None else f"fh:{fh[0]:g},{fh[1]:g}"
     except ValueError as exc:
-        raise _fail(exc) from exc
+        raise _fail(exc, as_json) from exc
     if as_json:
-        _print_json({"design": s, "simulation": sim})
+        _print_json("simulate", {"design": s, "simulation": sim})
         return
     typer.echo(
         f"trialdesign {__version__} | seed {seed_used} | {n_sim:,} simulated trials | "
@@ -1410,9 +1416,9 @@ def bayes_cmd(
         n_sim, seed_used = _simulation_settings(cfg, flags, None)
         s, sim = _bayes_run(bd, extra, n_sim, seed_used)
     except ValueError as exc:
-        raise _fail(exc) from exc
+        raise _fail(exc, as_json) from exc
     if as_json:
-        _print_json({"bayes": s, "simulation": sim})
+        _print_json("bayes", {"bayes": s, "simulation": sim})
         return
     seed_text = f"seed {seed_used}" if sim is not None else "exact (no simulation)"
     typer.echo(f"trialdesign {__version__} | {seed_text} | Bayesian interim, binary endpoint")
@@ -1488,9 +1494,9 @@ def ssr_cmd(
         else:
             _, s = _ssr_run(cfg, flags, adapt, n_sim, seed_used)
     except ValueError as exc:
-        raise _fail(exc) from exc
+        raise _fail(exc, as_json) from exc
     if as_json:
-        _print_json(s)
+        _print_json("ssr", s)
         return
     if s.get("design") == "blinded_ssr":
         typer.echo(
@@ -1625,7 +1631,7 @@ def report_cmd(
                 analysis=analysis,
             )
     except ValueError as exc:
-        raise _fail(exc) from exc
+        raise _fail(exc, as_json) from exc
     if as_json:
         payload: dict[str, Any] = {"files": [str(f) for f in files], "seed": seed_used}
         if gsd_part is not None:
@@ -1638,7 +1644,7 @@ def report_cmd(
             payload["bayes"], payload["bayes_simulation"] = bayes_part[1], bayes_part[2]
         if ssr_part is not None:
             payload["ssr"] = ssr_part[1]
-        _print_json(payload)
+        _print_json("report", payload)
         return
     if out is not None:
         seed_text = f" | seed {seed_used}" if seed_used is not None else ""
@@ -1802,10 +1808,10 @@ def graph_cmd(
                 graph, _numbers(gt["means"], "means"), corr, alpha, n_sim, seed_used
             )
     except ValueError as exc:
-        raise _fail(exc) from exc
+        raise _fail(exc, as_json) from exc
     out = report.graph_summary(graph, alpha, test, power, seed_used)
     if as_json:
-        _print_json(out)
+        _print_json("graph", out)
         return
     head = f"trialdesign {__version__} | graphical multiple test | alpha_one_sided {alpha:g}"
     if power is not None:

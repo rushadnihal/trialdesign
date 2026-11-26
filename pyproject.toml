@@ -36,7 +36,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "jsonschema>=4.18"]
 
 [project.scripts]
 trialdesign = "trialdesign.cli:app"
