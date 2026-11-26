@@ -2607,6 +2607,1727 @@
         "ssr"
       ],
       "title": "ssr"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "design": {
+          "type": "object",
+          "properties": {
+            "accrual_inputs": {
+              "type": "object",
+              "properties": {
+                "accrual_time": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "followup": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "median_control": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "accrual_time",
+                "followup",
+                "median_control"
+              ]
+            },
+            "allocation": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "alpha_one_sided": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "alpha_spent_cumulative": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "binding_futility": {
+              "type": "boolean"
+            },
+            "design": {
+              "type": "string"
+            },
+            "drift": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "efficacy_spending": {
+              "type": "string"
+            },
+            "efficacy_z": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "endpoint": {
+              "type": "string"
+            },
+            "exact": {
+              "type": "object",
+              "properties": {
+                "expected_total_h0": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_total_h1": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "power": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy_h0": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_efficacy_h1": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_h0": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_h1": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "type_i_error": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "expected_total_h0",
+                "expected_total_h1",
+                "power",
+                "prob_efficacy_h0",
+                "prob_efficacy_h1",
+                "prob_futility_h0",
+                "prob_futility_h1",
+                "type_i_error"
+              ]
+            },
+            "fixed": {
+              "type": "object",
+              "properties": {
+                "accrual": {
+                  "type": "object",
+                  "properties": {
+                    "accrual_duration": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "accrual_rates": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "accrual_times": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "dropout_hazard": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "followup": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "hazard_control": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "n_total": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "n_total_ceil": {
+                      "type": "integer"
+                    },
+                    "prob_event": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "study_duration": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accrual_duration",
+                    "accrual_rates",
+                    "accrual_times",
+                    "dropout_hazard",
+                    "followup",
+                    "hazard_control",
+                    "n_total",
+                    "n_total_ceil",
+                    "prob_event",
+                    "study_duration"
+                  ]
+                },
+                "accrual_inputs": {
+                  "type": "object",
+                  "properties": {
+                    "accrual_time": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "followup": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "median_control": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accrual_time",
+                    "followup",
+                    "median_control"
+                  ]
+                },
+                "allocation": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "alpha_two_sided": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "design": {
+                  "type": "string"
+                },
+                "endpoint": {
+                  "type": "string"
+                },
+                "events": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "events_ceil": {
+                  "type": "integer"
+                },
+                "hazard_ratio": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "n_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "n_total_ceil": {
+                  "type": "integer"
+                },
+                "power": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_event": {}
+              },
+              "required": [
+                "accrual",
+                "accrual_inputs",
+                "allocation",
+                "alpha_two_sided",
+                "design",
+                "endpoint",
+                "events",
+                "events_ceil",
+                "hazard_ratio",
+                "n_total",
+                "n_total_ceil",
+                "power",
+                "prob_event"
+              ]
+            },
+            "futility_spending": {},
+            "futility_z": {},
+            "hazard_ratio": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "inflation_factor": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "looks": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "nominal_p_one_sided": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "power": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "prob_event": {},
+            "sample_size": {
+              "type": "object",
+              "properties": {
+                "accrual": {
+                  "type": "object",
+                  "properties": {
+                    "accrual_duration": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "accrual_rates": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "accrual_times": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "dropout_hazard": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "followup": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "hazard_control": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "look_patients": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "look_time": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "n_total": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "n_total_ceil": {
+                      "type": "integer"
+                    },
+                    "prob_event": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "study_duration": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accrual_duration",
+                    "accrual_rates",
+                    "accrual_times",
+                    "dropout_hazard",
+                    "followup",
+                    "hazard_control",
+                    "look_patients",
+                    "look_time",
+                    "n_total",
+                    "n_total_ceil",
+                    "prob_event",
+                    "study_duration"
+                  ]
+                },
+                "fixed_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "look_total_ceil": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "max_events": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "max_events_ceil": {
+                  "type": "integer"
+                },
+                "max_n_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "max_n_total_ceil": {
+                  "type": "integer"
+                },
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "accrual",
+                "fixed_total",
+                "look_total_ceil",
+                "max_events",
+                "max_events_ceil",
+                "max_n_total",
+                "max_n_total_ceil",
+                "unit"
+              ]
+            }
+          },
+          "required": [
+            "accrual_inputs",
+            "allocation",
+            "alpha_one_sided",
+            "alpha_spent_cumulative",
+            "binding_futility",
+            "design",
+            "drift",
+            "efficacy_spending",
+            "efficacy_z",
+            "endpoint",
+            "exact",
+            "fixed",
+            "futility_spending",
+            "futility_z",
+            "hazard_ratio",
+            "inflation_factor",
+            "looks",
+            "nominal_p_one_sided",
+            "power",
+            "prob_event",
+            "sample_size"
+          ]
+        },
+        "files": {
+          "type": "array"
+        },
+        "nph": {
+          "type": "object",
+          "properties": {
+            "alternative": {
+              "type": "object",
+              "properties": {
+                "expected_duration": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_events": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_look_time": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "expected_patients": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "hazard_ratio": {},
+                "name": {
+                  "type": "string"
+                },
+                "power": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "power_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "simulated_look_time": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "expected_duration",
+                "expected_events",
+                "expected_look_time",
+                "expected_patients",
+                "hazard_ratio",
+                "name",
+                "power",
+                "power_se",
+                "prob_efficacy",
+                "prob_futility",
+                "simulated_look_time"
+              ]
+            },
+            "event_model": {
+              "type": "object",
+              "properties": {
+                "control": {
+                  "type": "object",
+                  "properties": {
+                    "hazards": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "times": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "hazards",
+                    "times"
+                  ]
+                },
+                "hazard_ratio": {},
+                "model": {
+                  "type": "string"
+                },
+                "treatment": {
+                  "type": "object",
+                  "properties": {
+                    "hazards": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    },
+                    "times": {
+                      "type": "array",
+                      "items": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "hazards",
+                    "times"
+                  ]
+                }
+              },
+              "required": [
+                "control",
+                "hazard_ratio",
+                "model",
+                "treatment"
+              ]
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "looks": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "nsim": {
+              "type": "integer"
+            },
+            "proportional": {
+              "type": "object",
+              "properties": {
+                "expected_duration": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_events": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_look_time": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "expected_patients": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "hazard_ratio": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "power": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "power_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "simulated_look_time": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "expected_duration",
+                "expected_events",
+                "expected_look_time",
+                "expected_patients",
+                "hazard_ratio",
+                "name",
+                "power",
+                "power_se",
+                "prob_efficacy",
+                "prob_futility",
+                "simulated_look_time"
+              ]
+            },
+            "scenario": {
+              "type": "string"
+            },
+            "seed": {
+              "type": "integer"
+            },
+            "test": {
+              "type": "string"
+            },
+            "test_text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "alternative",
+            "event_model",
+            "events",
+            "looks",
+            "nsim",
+            "proportional",
+            "scenario",
+            "seed",
+            "test",
+            "test_text"
+          ]
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "simulation": {
+          "type": "object",
+          "properties": {
+            "h0": {
+              "type": "object",
+              "properties": {
+                "expected_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_total_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_efficacy_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "reject": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "reject_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "expected_total",
+                "expected_total_se",
+                "futility",
+                "futility_se",
+                "prob_efficacy",
+                "prob_efficacy_se",
+                "prob_futility",
+                "prob_futility_se",
+                "reject",
+                "reject_se"
+              ]
+            },
+            "h0_ignore_futility": {
+              "type": "object",
+              "properties": {
+                "expected_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_total_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_efficacy_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "reject": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "reject_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "expected_total",
+                "expected_total_se",
+                "futility",
+                "futility_se",
+                "prob_efficacy",
+                "prob_efficacy_se",
+                "prob_futility",
+                "prob_futility_se",
+                "reject",
+                "reject_se"
+              ]
+            },
+            "h1": {
+              "type": "object",
+              "properties": {
+                "expected_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_total_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_efficacy_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "reject": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "reject_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "expected_total",
+                "expected_total_se",
+                "futility",
+                "futility_se",
+                "prob_efficacy",
+                "prob_efficacy_se",
+                "prob_futility",
+                "prob_futility_se",
+                "reject",
+                "reject_se"
+              ]
+            },
+            "nsim": {
+              "type": "integer"
+            },
+            "power": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "power_se": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "seed": {
+              "type": "integer"
+            },
+            "type_i_error": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type_i_error_se": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "h0",
+            "h0_ignore_futility",
+            "h1",
+            "nsim",
+            "power",
+            "power_se",
+            "seed",
+            "type_i_error",
+            "type_i_error_se"
+          ]
+        },
+        "simulation_patient": {
+          "type": "object",
+          "properties": {
+            "h0": {
+              "type": "object",
+              "properties": {
+                "expected_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_total_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_efficacy_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "reject": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "reject_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "expected_total",
+                "expected_total_se",
+                "futility",
+                "futility_se",
+                "prob_efficacy",
+                "prob_efficacy_se",
+                "prob_futility",
+                "prob_futility_se",
+                "reject",
+                "reject_se"
+              ]
+            },
+            "h0_ignore_futility": {
+              "type": "object",
+              "properties": {
+                "expected_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_total_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_efficacy_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "reject": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "reject_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "expected_total",
+                "expected_total_se",
+                "futility",
+                "futility_se",
+                "prob_efficacy",
+                "prob_efficacy_se",
+                "prob_futility",
+                "prob_futility_se",
+                "reject",
+                "reject_se"
+              ]
+            },
+            "h1": {
+              "type": "object",
+              "properties": {
+                "expected_total": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expected_total_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "futility_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "prob_efficacy": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_efficacy_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "prob_futility_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "reject": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "reject_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "expected_total",
+                "expected_total_se",
+                "futility",
+                "futility_se",
+                "prob_efficacy",
+                "prob_efficacy_se",
+                "prob_futility",
+                "prob_futility_se",
+                "reject",
+                "reject_se"
+              ]
+            },
+            "nsim": {
+              "type": "integer"
+            },
+            "power": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "power_se": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "seed": {
+              "type": "integer"
+            },
+            "type_i_error": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type_i_error_se": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "h0",
+            "h0_ignore_futility",
+            "h1",
+            "nsim",
+            "power",
+            "power_se",
+            "seed",
+            "type_i_error",
+            "type_i_error_se"
+          ]
+        }
+      },
+      "required": [
+        "design",
+        "files",
+        "nph",
+        "seed",
+        "simulation",
+        "simulation_patient"
+      ],
+      "title": "nph"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array"
+        },
+        "graph": {
+          "type": "object",
+          "properties": {
+            "alpha_one_sided": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "hypotheses": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "transitions": {
+                    "type": "array",
+                    "items": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "weight": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "transitions",
+                  "weight"
+                ]
+              }
+            },
+            "power": {
+              "type": "object",
+              "properties": {
+                "all_power": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "all_power_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "any_power": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "any_power_se": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "correlation": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  }
+                },
+                "expected_rejections": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "local_power": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "local_power_se": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "means": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "nsim": {
+                  "type": "integer"
+                },
+                "seed": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "all_power",
+                "all_power_se",
+                "any_power",
+                "any_power_se",
+                "correlation",
+                "expected_rejections",
+                "local_power",
+                "local_power_se",
+                "means",
+                "nsim",
+                "seed"
+              ]
+            },
+            "procedure": {
+              "type": "string"
+            },
+            "test": {
+              "type": "object",
+              "properties": {
+                "adjusted_p": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "p_values": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "rejected": {
+                  "type": "array",
+                  "items": {
+                    "type": "boolean"
+                  }
+                },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "level": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "p_value": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "rejected": {
+                        "type": "string"
+                      },
+                      "weights_after": {
+                        "type": "array",
+                        "items": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "level",
+                      "p_value",
+                      "rejected",
+                      "weights_after"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "adjusted_p",
+                "p_values",
+                "rejected",
+                "steps"
+              ]
+            }
+          },
+          "required": [
+            "alpha_one_sided",
+            "hypotheses",
+            "power",
+            "procedure",
+            "test"
+          ]
+        },
+        "seed": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "files",
+        "graph",
+        "seed"
+      ],
+      "title": "graph"
     }
   ]
 }

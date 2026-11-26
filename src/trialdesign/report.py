@@ -40,6 +40,7 @@ from trialdesign import (
     fixed,
     inference,
     multiplicity,
+    patients,
     ssr,
 )
 from trialdesign.boundaries import (
@@ -47,6 +48,7 @@ from trialdesign.boundaries import (
     crossing_probabilities,
     expected_info_fraction,
 )
+from trialdesign.hazards import EventModel
 from trialdesign.simulate import DesignSimulation, OperatingCharacteristics
 from trialdesign.spending import cumulative_spending, spending_name
 
@@ -1807,6 +1809,316 @@ def plot_bayes_oc(
 # --------------------------------------------------------------------------- Markdown
 
 
+# ------------------------------------------------------- non-proportional hazards (report)
+
+
+def _scenario(sim: patients.SurvivalSimulation, look_times: NDArray, name: str) -> Summary:
+    p = float(sim.oc.prob_efficacy.sum())
+    hr = sim.hazard_ratio
+    return {
+        "name": name,
+        "hazard_ratio": None if not math.isfinite(hr) else float(hr),
+        "power": p,
+        "power_se": math.sqrt(p * (1 - p) / sim.oc.n_sim),
+        "prob_efficacy": _floats(sim.oc.prob_efficacy),
+        "prob_futility": _floats(sim.oc.prob_futility),
+        "expected_look_time": _floats(look_times),
+        "simulated_look_time": _floats(sim.analysis_time),
+        "expected_duration": sim.expected_duration,
+        "expected_patients": sim.expected_patients,
+        "expected_events": sim.expected_events,
+    }
+
+
+def nph_summary(
+    design: GroupSequentialDesign,
+    study: accrual.SurvivalStudy,
+    model: EventModel,
+    description: str,
+    *,
+    n_total: int,
+    events: int,
+    fh: tuple[float, float] | None = None,
+    n_sim: int = 10_000,
+    seed: int | None = None,
+) -> Summary:
+    """The design under proportional hazards next to an event-time scenario, by simulation.
+
+    Both columns simulate patients with the same seed (common random numbers) and follow the
+    design's futility boundary. Look times are also given exactly, from the expected events
+    under each model (:meth:`trialdesign.accrual.SurvivalStudy.look_times`).
+    """
+    common = {
+        "futility": design.futility,
+        "n_total": n_total,
+        "events": events,
+        "fh": fh,
+        "n_sim": n_sim,
+        "seed": seed,
+    }
+    t = design.info_rates
+    ph = patients.simulate_survival(study, t, design.efficacy, **common)
+    alt = patients.simulate_survival(study, t, design.efficacy, model=model, **common)
+    test = (
+        "the log-rank test" if fh is None else f"the FH({fh[0]:g},{fh[1]:g}) weighted log-rank test"
+    )
+    return {
+        "scenario": description,
+        "event_model": model.describe(),
+        "test": ph.test,
+        "test_text": test,
+        "nsim": n_sim,
+        "seed": seed,
+        "looks": _floats(t),
+        "events": [int(x) for x in ph.events],
+        "proportional": _scenario(ph, study.look_times(t), "proportional hazards (design)"),
+        "alternative": _scenario(alt, study.look_times(t, model), "scenario"),
+    }
+
+
+def nph_markdown(s: Summary, plots: bool = True) -> str:
+    """Markdown section comparing the design under PH with the event-time scenario."""
+    ph, alt = s["proportional"], s["alternative"]
+    k = len(s["looks"])
+    rows: list[list[Any]] = [
+        [
+            "Power",
+            f"{ph['power']:.4f} ({ph['power_se']:.4f})",
+            f"{alt['power']:.4f} ({alt['power_se']:.4f})",
+        ],
+    ]
+    for i in range(k):
+        rows.append(
+            [
+                f"Look {i + 1} ({s['events'][i]} events): month",
+                f"{ph['expected_look_time'][i]:.1f}",
+                f"{alt['expected_look_time'][i]:.1f}",
+            ]
+        )
+        rows.append(
+            [
+                f"Look {i + 1}: P(stop for efficacy)",
+                f"{ph['prob_efficacy'][i]:.4f}",
+                f"{alt['prob_efficacy'][i]:.4f}",
+            ]
+        )
+        if any(ph["prob_futility"][: k - 1]) or any(alt["prob_futility"][: k - 1]):
+            if i < k - 1:
+                rows.append(
+                    [
+                        f"Look {i + 1}: P(stop for futility)",
+                        f"{ph['prob_futility'][i]:.4f}",
+                        f"{alt['prob_futility'][i]:.4f}",
+                    ]
+                )
+    rows += [
+        [
+            "Expected duration (months)",
+            f"{ph['expected_duration']:.1f}",
+            f"{alt['expected_duration']:.1f}",
+        ],
+        ["Expected patients", f"{ph['expected_patients']:.0f}", f"{alt['expected_patients']:.0f}"],
+        ["Expected events", f"{ph['expected_events']:.0f}", f"{alt['expected_events']:.0f}"],
+    ]
+    loss = ph["power"] - alt["power"]
+    parts = [
+        "## Non-proportional hazards",
+        f"The design is sized for proportional hazards. This section simulates it with "
+        f"{s['scenario']}, analysed with {s['test_text']}, next to the proportional-hazards "
+        f"trial it was sized for: {s['nsim']:,} patient-level trials per column with the same "
+        f"seed ({s['seed']}), futility followed. Power changes by {-loss:+.3f} "
+        f"({ph['power']:.3f} to {alt['power']:.3f}). Look months are exact (expected events "
+        "under each model); probabilities are simulated, with their Monte Carlo SE in brackets.",
+        format_table(["", "Proportional hazards", "Scenario"], rows, markdown=True),
+    ]
+    if plots:
+        parts.append("![Survival curves per arm](survival.png)")
+    return "\n\n".join(parts)
+
+
+def plot_survival(model: EventModel, hazard_ratio: float, horizon: float, path: str | Path) -> Path:
+    """Survival per arm under the scenario, next to the proportional-hazards treatment arm."""
+    x = np.linspace(0.0, float(horizon), 400)
+    s_c = model.control.survival(x)
+    fig = _figure(7, 4.2)
+    ax = fig.add_subplot()
+    _style(ax)
+    ax.plot(x, s_c, color=_MUTED, linewidth=2, label="Control")
+    ax.plot(
+        x,
+        s_c**hazard_ratio,
+        color=_BLUE,
+        linewidth=1.6,
+        linestyle="--",
+        label=f"Treatment, proportional hazards (HR {hazard_ratio:g})",
+    )
+    ax.plot(x, model.treatment.survival(x), color=_ORANGE, linewidth=2, label="Treatment, scenario")
+    ax.set_xlim(0, float(horizon))
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("Months since entry")
+    ax.set_ylabel("Survival")
+    ax.set_title("Survival per arm", loc="left", fontsize=11, color=_INK)
+    ax.legend(frameon=False, fontsize=9, loc="upper right")
+    fig.tight_layout()
+    out = Path(path)
+    fig.savefig(out)
+    return out
+
+
+# ------------------------------------------------------------------- graph (report)
+
+
+def _graph_positions(m: int) -> list[tuple[float, float]]:
+    if m == 4:  # two primaries over their secondaries, as graphs are usually drawn
+        return [(0.0, 1.0), (1.0, 1.0), (0.0, 0.0), (1.0, 0.0)]
+    if m == 3:
+        return [(0.5, 0.9), (0.0, 0.0), (1.0, 0.0)]
+    if m <= 2:
+        return [(float(i), 0.5) for i in range(m)]
+    angles = [math.pi / 2 - 2 * math.pi * i / m for i in range(m)]
+    return [(0.5 + 0.5 * math.cos(a), 0.5 + 0.5 * math.sin(a)) for a in angles]
+
+
+def plot_graph(
+    graph: multiplicity.Graph, path: str | Path, local_power: Sequence[float] | None = None
+) -> Path:
+    """The graph: hypotheses with their weights (and local power), arrows with transitions."""
+    from matplotlib.patches import Circle, FancyArrowPatch
+
+    m = graph.size
+    pos = _graph_positions(m)
+    fig = _figure(7, 4.6)
+    ax = fig.add_subplot()
+    ax.set_axis_off()
+    r = 0.15
+    for i, (x, y) in enumerate(pos):
+        ax.add_patch(Circle((x, y), r, facecolor="#eef4fc", edgecolor=_BLUE, linewidth=1.6))
+        name = graph.names[i]
+        label = name if len(name) <= 8 else name.replace(" ", "\n", 1)
+        ax.text(x, y + 0.035, label, ha="center", va="center", fontsize=7.5, color=_INK)
+        ax.text(
+            x,
+            y - 0.06,
+            f"w = {graph.weights[i]:.3g}",
+            ha="center",
+            va="center",
+            fontsize=8,
+            color=_INK_2,
+        )
+        if local_power is not None:
+            # above the top-row nodes, below the others, clear of the arrows between rows
+            above = y > sum(p[1] for p in pos) / m + 1e-9
+            ax.text(
+                x,
+                y + r + 0.05 if above else y - r - 0.05,
+                f"power {local_power[i]:.3f}",
+                ha="center",
+                va="center",
+                fontsize=8,
+                color=_ORANGE,
+            )
+    for i in range(m):
+        for j in range(m):
+            g = graph.transitions[i][j]
+            if g <= 0:
+                continue
+            (x0, y0), (x1, y1) = pos[i], pos[j]
+            rad = 0.18 if graph.transitions[j][i] > 0 else 0.0
+            length = math.hypot(x1 - x0, y1 - y0)
+            ux, uy = (x1 - x0) / length, (y1 - y0) / length
+            # start and end on the circles, turned towards the bowed side for an arc
+            turn = 0.35 if rad else 0.0
+            ca, sa = math.cos(turn), math.sin(turn)
+            sx, sy = ux * ca + uy * sa, -ux * sa + uy * ca
+            ex, ey = ux * ca - uy * sa, ux * sa + uy * ca
+            arrow = FancyArrowPatch(
+                (x0 + r * sx, y0 + r * sy),
+                (x1 - r * ex, y1 - r * ey),
+                connectionstyle=f"arc3,rad={rad}",
+                arrowstyle="-|>",
+                mutation_scale=12,
+                shrinkA=0,
+                shrinkB=2,
+                color=_INK_2,
+                linewidth=1.1,
+            )
+            ax.add_patch(arrow)
+            dx, dy = x1 - x0, y1 - y0
+            if rad:  # mid-arc, on its bowed side
+                mx, my = x0 + dx / 2, y0 + dy / 2
+                ox, oy = dy * rad * 0.6, -dx * rad * 0.6
+            else:  # nearer the source, so crossing arrows keep their labels apart
+                mx, my = x0 + 0.3 * dx, y0 + 0.3 * dy
+                ox = oy = 0.0
+            ax.text(
+                mx + ox,
+                my + oy,
+                f"{g:.3g}",
+                ha="center",
+                va="center",
+                fontsize=8,
+                color=_INK,
+                bbox={"boxstyle": "round,pad=0.15", "facecolor": "white", "edgecolor": "none"},
+            )
+    xs = [p[0] for p in pos]
+    ys = [p[1] for p in pos]
+    ax.set_xlim(min(xs) - 0.3, max(xs) + 0.3)
+    ax.set_ylim(min(ys) - 0.3, max(ys) + 0.3)
+    ax.set_aspect("equal")
+    ax.set_title("Graph: initial weights and transitions", loc="left", fontsize=11, color=_INK)
+    fig.tight_layout()
+    out = Path(path)
+    fig.savefig(out)
+    return out
+
+
+def graph_markdown(s: Summary, plots: bool = True) -> str:
+    """Markdown section for a graphical multiple test (:func:`graph_summary`)."""
+    hyp = s["hypotheses"]
+    names = [h["name"] for h in hyp]
+    rows = [[h["name"], h["weight"], *h["transitions"]] for h in hyp]
+    parts = [
+        "## Multiple testing",
+        f"The hypotheses share one-sided alpha {s['alpha_one_sided']:g} through a graphical "
+        "weighted Bonferroni test (Bretz et al. 2009). Each starts with its weight times alpha; "
+        "when one is rejected, its level passes to the others in the shares of its row.",
+        format_table(["Hypothesis", "Weight", *(f"to {n}" for n in names)], rows, markdown=True),
+    ]
+    if plots:
+        parts.append("![The graph](graph.png)")
+    if s.get("test") is not None:
+        t = s["test"]
+        test_rows = [
+            [n, pv, ap, "yes" if rj else "no"]
+            for n, pv, ap, rj in zip(
+                names, t["p_values"], t["adjusted_p"], t["rejected"], strict=True
+            )
+        ]
+        parts += [
+            "### Observed p-values",
+            format_table(
+                ["Hypothesis", "p-value", "Adjusted p", "Rejected"], test_rows, markdown=True
+            ),
+        ]
+    if s.get("power") is not None:
+        pw = s["power"]
+        power_rows = [
+            [n, mu, lp, se]
+            for n, mu, lp, se in zip(
+                names, pw["means"], pw["local_power"], pw["local_power_se"], strict=True
+            )
+        ]
+        parts += [
+            "### Power",
+            f"Simulated from correlated z-statistics ({pw['nsim']:,} trials, seed {pw['seed']}). "
+            f"The chance of rejecting at least one hypothesis is {pw['any_power']:.4f} "
+            f"(SE {pw['any_power_se']:.4f}), all of them {pw['all_power']:.4f}, and on average "
+            f"{pw['expected_rejections']:.2f} are rejected.",
+            format_table(["Hypothesis", "Mean z", "Power", "MC SE"], power_rows, markdown=True),
+        ]
+    return "\n\n".join(parts)
+
+
 def gsd_markdown(
     s: Summary,
     sim: Summary | None = None,
@@ -2081,6 +2393,8 @@ def write_report(
     ssr_design: tuple[ssr.SSRDesign, Summary] | None = None,
     patient: Summary | None = None,
     analysis: Summary | None = None,
+    nph: tuple[EventModel, float, Summary] | None = None,
+    graph: tuple[multiplicity.Graph, Summary] | None = None,
 ) -> list[Path]:
     """Write ``report.md`` and its PNG plots into ``out_dir`` (created if needed).
 
@@ -2102,18 +2416,26 @@ def write_report(
         Patient-engine simulation summary, shown next to the score-engine one.
     analysis : dict, optional
         :func:`inference_summary` of observed z-statistics, reported after the design.
+    nph : (EventModel, design hazard ratio, :func:`nph_summary`), optional
+        Non-proportional hazards scenario: writes ``survival.png``.
+    graph : (Graph, :func:`graph_summary`), optional
+        Graphical multiple test: writes ``graph.png``.
 
     Returns
     -------
     list of Path
         The files written, report first.
     """
-    if gsd is None and bayes_design is None:
-        raise ValueError("nothing to report: give a group-sequential or a Bayesian design")
+    if gsd is None and bayes_design is None and graph is None:
+        raise ValueError(
+            "nothing to report: give a group-sequential or a Bayesian design or a graph"
+        )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     seeds = [x[2]["seed"] for x in (gsd, bayes_design) if x is not None and x[2] is not None]
+    if graph is not None and graph[1].get("power") is not None:
+        seeds.append(graph[1]["power"]["seed"])
     intro = (
         f"Generated by trialdesign {version}"
         + (f" from `{source}`" if source else "")
@@ -2133,6 +2455,11 @@ def write_report(
         parts.append(gsd_markdown(s, sim, patient=patient))
         if analysis is not None:
             parts.append(inference_markdown(analysis))
+    if nph is not None:
+        model, hr, ns = nph
+        horizon = ns["alternative"]["expected_look_time"][-1]
+        written.append(plot_survival(model, hr, horizon, out / "survival.png"))
+        parts.append(nph_markdown(ns))
     if ssr_design is not None:
         sd, ss = ssr_design
         written.append(plot_ssr(sd, out / "ssr.png", ss["n_planned"], ss.get("unit", "patients")))
@@ -2142,6 +2469,11 @@ def write_report(
         written.append(plot_bayes_oc(bd, s["p_control"], s["p_treatment"], out / "bayes_oc.png"))
         written.append(plot_decision_map(bd, out / "decision_map.png"))
         parts.append(bayes_markdown(s, sim))
+    if graph is not None:
+        g, gs = graph
+        local = None if gs.get("power") is None else gs["power"]["local_power"]
+        written.append(plot_graph(g, out / "graph.png", local))
+        parts.append(graph_markdown(gs))
     parts += [
         "## References",
         "- Jennison, C. and Turnbull, B. W. (2000). *Group Sequential Methods with Applications "
@@ -2168,7 +2500,11 @@ def write_report(
         "- Tsiatis, A. A., Rosner, G. L. and Mehta, C. R. (1984). Exact confidence intervals "
         "following a group sequential test. *Biometrics* 40, 797-803.\n"
         "- Tsiatis, A. A. (1981). The asymptotic joint distribution of the efficient scores test "
-        "for the proportional hazards model calculated over time. *Biometrika* 68, 311-315.",
+        "for the proportional hazards model calculated over time. *Biometrika* 68, 311-315.\n"
+        "- Bretz, F., Maurer, W., Brannath, W. and Posch, M. (2009). A graphical approach to "
+        "sequentially rejective multiple test procedures. *Statistics in Medicine* 28, 586-604.\n"
+        "- Fleming, T. R. and Harrington, D. P. (1991). *Counting Processes and Survival "
+        "Analysis*. Wiley.",
     ]
     md = out / "report.md"
     md.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
