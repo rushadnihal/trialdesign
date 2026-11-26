@@ -2,29 +2,62 @@
 
 [![CI](https://github.com/rushadnihal/trialdesign/actions/workflows/ci.yml/badge.svg)](https://github.com/rushadnihal/trialdesign/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/gsdtrial)](https://pypi.org/project/gsdtrial/)
+[![Python](https://img.shields.io/pypi/pyversions/gsdtrial)](https://pypi.org/project/gsdtrial/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/rushadnihal/trialdesign/blob/main/LICENSE)
 
-Design a two-arm clinical trial before the data exist. `trialdesign` is a Python command-line
-package for:
+Design a two-arm clinical trial before the data exist. `trialdesign` is a Python package and
+command-line tool that sizes the trial, plans its interim looks, simulates it, and writes up
+the design, with every number checked against R (`rpact`, `gsDesign`, `mvtnorm`, `stats`).
 
-- fixed-design sample size (continuous, binary and time-to-event endpoints), for superiority,
-  non-inferiority or equivalence (two one-sided tests),
-- group-sequential boundaries with O'Brien-Fleming-type, Pocock-type, Hwang-Shih-DeCani,
-  Kim-DeMets or user-specified spending, and non-binding (default) or binding futility,
-- promising-zone sample size re-estimation at an interim, with the Cui-Hung-Wang test, and
-  its survival counterpart that re-estimates the number of events,
-- survival accrual, follow-up and dropout: patients, study duration and the calendar time of
-  each look,
-- a Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance,
-- graphical multiple testing (Bretz et al. 2009) for several hypotheses sharing one alpha, such
-  as two doses with primary and secondary endpoints: rejections, adjusted p-values and power,
-- inference at the end of a group-sequential trial: repeated confidence intervals and p-values,
-  and the stage-wise p-value, median-unbiased estimate and confidence interval,
-- exact and Monte Carlo operating characteristics, including a patient-level survival
-  simulator (accrual, dropout, event-driven looks, log-rank test) that can also simulate
-  delayed, waning or crossing treatment effects, Weibull event times and the
-  Fleming-Harrington weighted log-rank test, and a Markdown design report.
+**Sizing and boundaries**
 
-Every number is checked against R (`rpact`, `gsDesign`, `stats`). See [Validated against](#validated-against).
+- Fixed-design sample size for continuous, binary and time-to-event endpoints: superiority,
+  non-inferiority, and equivalence (two one-sided tests).
+- Group-sequential designs with O'Brien-Fleming-type, Pocock-type, Hwang-Shih-DeCani,
+  Kim-DeMets or user-specified spending, non-binding (default) or binding futility, and
+  group-sequential equivalence.
+- Survival accrual, follow-up and dropout: patients, study duration and the calendar month of
+  each look.
+
+**Adapting and deciding**
+
+- Promising-zone sample size re-estimation with the Cui-Hung-Wang test, its survival version
+  that re-estimates the number of events, and blinded re-estimation of the SD from an internal
+  pilot.
+- A Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance.
+- Graphical multiple testing (Bretz et al. 2009) for several hypotheses sharing one alpha.
+- Inference at the end of a group-sequential trial: repeated confidence intervals and p-values,
+  and the stage-wise p-value, median-unbiased estimate and confidence interval.
+
+**Checking**
+
+- Exact operating characteristics by numerical integration, and two simulators: a fast one on
+  the z-scale, and a patient-level one that runs the real test on simulated patients.
+- Non-proportional hazards: delayed, waning or crossing effects and Weibull event times in the
+  patient-level survival simulator, and the Fleming-Harrington weighted log-rank test.
+- A Markdown design report with plots, and stable `--json` output with JSON Schemas.
+
+Changes by version are in [CHANGELOG.md](https://github.com/rushadnihal/trialdesign/blob/main/CHANGELOG.md).
+
+## Contents
+
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Command line](#command-line)
+- [Guide](#guide): [hypotheses](#superiority-non-inferiority-and-equivalence),
+  [spending and futility](#spending-functions-and-binding-futility),
+  [survival accrual](#survival-accrual-and-calendar-time),
+  [simulation](#simulation-score-and-patient-engines),
+  [non-proportional hazards](#non-proportional-hazards),
+  [re-estimation](#sample-size-re-estimation),
+  [Bayesian interim](#bayesian-gono-go-interim),
+  [inference](#inference-at-the-end-of-the-trial),
+  [multiple testing](#graphical-multiple-testing),
+  [reports](#design-reports), [JSON](#json-output)
+- [Python API](#python-api)
+- [Methods](#methods)
+- [Validated against](#validated-against)
+- [Development](#development)
 
 ## Install
 
@@ -36,10 +69,10 @@ The package is published on PyPI as `gsdtrial`, because the name `trialdesign` t
 an unrelated project. You still `import trialdesign` and run `trialdesign`. That other project
 also installs a `trialdesign` import, so don't install both in the same environment.
 
-Python 3.11 or later; depends on numpy, scipy, typer and matplotlib. For the latest
+Python 3.11 to 3.14; depends on numpy, scipy, typer and matplotlib. For the latest
 development version: `pip install git+https://github.com/rushadnihal/trialdesign`.
 
-## 30-second quickstart
+## Quickstart
 
 A phase 3 survival trial with hazard ratio 0.70, 80% power, one-sided alpha 0.025, two interim
 looks, O'Brien-Fleming-type efficacy and Pocock-type non-binding futility
@@ -47,7 +80,7 @@ looks, O'Brien-Fleming-type efficacy and Pocock-type non-binding futility
 
 ```bash
 trialdesign design --endpoint survival --hr 0.7 --prob-event 0.75 \
-    --looks 0.33,0.67,1 --spending obf --futility pocock
+    --looks 0.33,0.67,1 --efficacy obf --futility pocock
 ```
 
 ```text
@@ -88,17 +121,47 @@ Futility is non-binding: boundaries and type I error are computed as if futility
 so alpha is controlled whether or not the data monitoring committee stops. Following futility
 cuts the expected number of events under H0 from 307 to 143.
 
-A Bayesian phase 2 interim works the same way
-([`examples/phase2_binary_bayes.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase2_binary_bayes.toml)):
+For a worked example written the way it would be presented to a clinical team, see the
+[design memo](https://github.com/rushadnihal/trialdesign/blob/main/docs/design_memo.md): a
+fictional phase 2 trial with a Bayesian interim, a follow-on phase 3 with sample size
+re-estimation, and a v0.4 addendum on what a delayed treatment effect does to the phase 3
+survival design.
 
-```bash
-trialdesign bayes --pc 0.30 --pt 0.45 --n 60 --interim 30 --go 0.9 --nogo 0.1 --xc 6 --xt 12
-```
+## Command line
 
-[`docs/design_memo.md`](https://github.com/rushadnihal/trialdesign/blob/main/docs/design_memo.md)
-uses it to design a fictional phase 2 trial, written the way it would be presented to a
-clinical team, with an addendum that sizes the follow-on phase 3 with sample size
-re-estimation.
+| Command | Does |
+| --- | --- |
+| `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics; `--margin` for equivalence (group-sequential with `--looks`), `--analyse` for inference from observed z |
+| `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test, and for survival `--delay`, `--waning`, `--hazard-times` or `--kappa` simulate another event-time model and `--test fh:0,1` the weighted log-rank test |
+| `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z; `--blinded` re-estimates the SD from an internal pilot |
+| `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
+| `trialdesign graph` | Graphical multiple test: rejections, adjusted p-values and the path for observed p-values (`--p`), and power for given z-means and correlation (`--means`) |
+| `trialdesign report` | `report.md` plus PNG plots; adds sections for a patient-level check (`--engine patient`), inference (`--analyse`), non-proportional hazards (`--delay` or another event model) and multiple testing (a `[graph]` table) |
+
+Each command takes flags, a TOML design file (`--config`), or both; flags override the file.
+Output is a plain table, or JSON with `--json`. Only `report --out` writes to disk, and every
+simulation prints its seed and the package version. Alpha always names its sidedness: fixed
+designs report two-sided alpha (default 0.05), group-sequential designs one-sided (default
+0.025). Run `trialdesign COMMAND --help` for every option.
+
+The [`examples/`](https://github.com/rushadnihal/trialdesign/tree/main/examples) folder has a
+commented design file for each kind of design:
+
+| File | Design |
+| --- | --- |
+| [`phase3_survival.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival.toml) | Group-sequential survival trial (the quickstart) |
+| [`phase3_survival_accrual.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_accrual.toml) | The same with accrual, follow-up and calendar time |
+| [`phase3_survival_nph.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_nph.toml) | Sized under proportional hazards, simulated with a 4-month delayed effect |
+| [`phase3_ni_binary.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_ni_binary.toml) | Non-inferiority, binary endpoint |
+| [`phase3_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_ssr.toml) | Promising-zone sample size re-estimation |
+| [`phase3_survival_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_ssr.toml) | Re-estimating the number of events |
+| [`phase3_blinded_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_blinded_ssr.toml) | Blinded re-estimation of the SD |
+| [`phase2_binary_bayes.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase2_binary_bayes.toml) | Bayesian go/no-go interim |
+| [`two_doses_graph.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/two_doses_graph.toml) | Two doses, primary and secondary endpoints, one graph |
+
+## Guide
+
+### Superiority, non-inferiority and equivalence
 
 For non-inferiority, give the effect under H0: `--delta0` for a difference in means or rates
 (treatment minus control), `--hr0` for a hazard ratio. Here both arms respond at 85% and
@@ -107,30 +170,16 @@ treatment must not be worse by 10 points
 
 ```bash
 trialdesign design --endpoint binary --pc 0.85 --pt 0.85 --delta0 -0.10   # 207 per arm
-trialdesign design --endpoint survival --hr 1.0 --hr0 1.3 --looks 3       # 504 events
+trialdesign design --endpoint survival --hr 1.0 --hr0 1.3 --looks 3       # 462 events
 ```
 
-For a survival design, an accrual model turns events into patients and calendar time
-(Lachin-Foulkes, exponential events and dropout, as in `rpact`). Give the control median and
-two of accrual time, accrual rate and follow-up; the third is solved
-([`examples/phase3_survival_accrual.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_accrual.toml)):
+The non-inferiority test is one-sided in the direction of the alternative. For a binary
+endpoint the variance under H0 uses the Farrington-Manning restricted maximum likelihood rates,
+as `rpact` and `gsDesign::nBinomial` do.
 
-```bash
-trialdesign design --endpoint survival --hr 0.7 --looks 3 --median-control 12 \
-    --accrual-time 24 --followup 12 --dropout 0.05
-# 250 events, 391 patients; looks expected at months 16.6, 25.1 and 36.0
-```
-
-Piecewise accrual takes one rate per segment, e.g. `--accrual-time 6 --accrual-rate 10,25
---followup 12` for a 6-month ramp-up (the end of accrual is solved).
-
-The non-inferiority test is one-sided in the direction of the alternative. For a binary endpoint the variance
-under H0 uses the Farrington-Manning restricted maximum likelihood rates, as `rpact` and
-`gsDesign::nBinomial` do.
-
-For equivalence, `--margin` gives the margin on the difference T - C, symmetric (`0.1`) or as
+For equivalence, `--margin` gives the margin on the difference T − C, symmetric (`0.1`) or as
 `lower,upper`. Equivalence is concluded when both one-sided tests reject, each at
-`alpha_two_sided / 2`, which is the 1 - alpha_two_sided confidence interval lying inside the
+`alpha_two_sided / 2`, which is the 1 − alpha_two_sided confidence interval lying inside the
 margins (Schuirmann 1987). Use `--alpha-two-sided 0.1` for the usual 90% interval:
 
 ```bash
@@ -165,101 +214,7 @@ Look    Info  n C  n T     c_k  RCI +/-   P(eq)  P(eq) at lo  P(eq) at hi
 
 Per look the table gives the sizes, the critical value, the half-width of the repeated
 confidence interval at the planned size and the probability of declaring equivalence at the
-design difference and at each margin (at most alpha). In Python:
-`equivalence.group_sequential_equivalence_normal` (or `_binary`), whose `simulate` checks the
-probabilities with patient-level means.
-
-### Inference at the end of the trial
-
-`--analyse` takes the z-statistics observed so far, one per look, with positive favouring
-treatment, and reports inference that respects the group-sequential design:
-
-```bash
-trialdesign design --endpoint survival --hr 0.7 --looks 3 --analyse 1.2,2.6
-```
-
-```text
-Look    Info       z  Efficacy z  Estimate (HR)   Repeated 95% CI  Repeated p
-1     0.3333  1.2000      3.7103         0.7688  0.3410 to 1.7333      0.3629
-2     0.6667  2.6000      2.5114         0.6684  0.4530 to 0.9864      0.0209
-
-Look 2 (efficacy boundary crossed). Stage-wise ordering: p = 0.004702, median-unbiased HR 0.6685, 95% CI 0.4934 to 0.9059.
-```
-
-Repeated confidence intervals (Jennison and Turnbull 1989) and repeated p-values are valid at
-every look, whether or not the trial stops there. Once a boundary is crossed, or at the last
-look, the stage-wise ordering gives the p-value, the median-unbiased estimate and its confidence
-interval (Tsiatis, Rosner and Mehta 1984). These account for the looks already taken: the
-estimate is median-unbiased over all the ways the trial could have stopped, and the p-value and
-interval keep their error rates, which the fixed-sample ones do not. With O'Brien-Fleming-type
-boundaries the difference is often small (in the example the naive and stage-wise values are
-close), and at the first look the two coincide; it grows with Pocock-type boundaries. Effects are
-mapped from the z-scale with the planned information, so for a hazard ratio they use
-Schoenfeld's D/4. If the looks fell at other information fractions, rebuild the design with
-`--looks` at the observed fractions first. A non-binding futility boundary is ignored, as it is
-for the design's type I error. In Python, `trialdesign.inference.analyse` returns the same
-quantities, and `trialdesign.equivalence` has the TOST functions.
-
-### Sample size re-estimation
-
-`trialdesign ssr` plans a two-look design and adds a promising-zone rule (Mehta and Pocock
-2011): if the conditional power at the observed interim trend lies between `--cp-min` and
-`--cp-target`, the second stage grows until it reaches `--cp-target`, up to `--max-factor`
-times the planned maximum. The final test weights the stages by their planned information
-(Cui, Hung and Wang 1999), so alpha is controlled exactly whatever the interim shows
-([`examples/phase3_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_ssr.toml)):
-
-```bash
-trialdesign ssr --config examples/phase3_ssr.toml            # zones and exact OCs
-trialdesign ssr --config examples/phase3_ssr.toml --z1 1.5   # apply the rule to an interim
-```
-
-```text
-Zone                 Interim z1  Observed / design effect  Total patients
-Unfavourable            < 1.213                   < 0.611             352
-Promising        1.213 to 1.813            0.611 to 0.913      352 to 704
-Favourable       1.813 to 2.963                  >= 0.913             352
-Efficacy (stop)        >= 2.963                                       176
-```
-
-Operating characteristics are exact (one-dimensional integration over the interim z), with a
-simulated check. With these defaults (CP 0.36 to 0.8, cap 2x, interim at half), power at
-the design effect rises from 0.800 to 0.834 for 37 more patients on average; at 70% of the
-design effect, from 0.500 to 0.548. Pooling all patients in a naive final test would also hold
-alpha for this promising-zone rule (0.0244), but not for a rule that adapts in every zone
-(0.0303 with `--cp-min 0`), which is why the weighted test is always used.
-
-![Re-estimated sample size against the interim z, and power curves](https://raw.githubusercontent.com/rushadnihal/trialdesign/main/docs/img/ssr.png)
-
-#### Blinded re-estimation of the SD
-
-`trialdesign ssr --blinded` (normal endpoint, fixed design) re-estimates the SD from an
-internal pilot of `--pilot-n` patients **without unblinding** (Kieser and Friede 2003): the
-one-sample variance of the pooled pilot data, optionally minus its bias at the design
-difference (`--sd-adjusted`). The sample size is recomputed with the usual formula, kept
-between the planned size (`--floor planned`, the default; or `--floor pilot`) and
-`--max-factor` times it, and the final one-sided t-test uses all patients. Type I error,
-power and the sample size distribution are simulated for true SDs of 0.75 to 1.5 times the
-planning SD; `--pilot-sd` applies the rule to an observed pilot
-([`examples/phase3_blinded_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_blinded_ssr.toml)):
-
-```bash
-trialdesign ssr --config examples/phase3_blinded_ssr.toml
-```
-
-```text
-True SD  Type I error   Power  Mean N  N 5%-95%  P(N at cap)
-7.5000         0.0247  0.9604   126.0   126-126       0.0000
-10.0000        0.0255  0.8259   140.5   126-178     8.00e-05
-12.5000        0.0247  0.7947   203.0   148-252       0.1153
-15.0000        0.0254  0.7380   245.6   210-252       0.7684
-
-Pilot SD 12: variance used 144.0000; n_control 91, n_treatment 91, total 182
-```
-
-Planned for SD 10, the trial keeps about 80% power when the SD is really 12.5 (a fixed
-design of 126 would have about 61%), until the cap of twice the planned size binds; the type
-I error stays at alpha within simulation error. In Python: `trialdesign.blinded.BlindedSSR`.
+design difference and at each margin (at most alpha).
 
 ### Spending functions and binding futility
 
@@ -267,10 +222,10 @@ I error stays at alpha within simulation error. In Python: `trialdesign.blinded.
 
 | Value | Spending | Cumulative error spent by information fraction t |
 | --- | --- | --- |
-| `obf` | Lan-DeMets O'Brien-Fleming-type | 2 - 2 Phi(z_(1-a/2) / sqrt(t)) |
-| `pocock` | Lan-DeMets Pocock-type | a log(1 + (e - 1) t) |
-| `hsd:<gamma>` | Hwang-Shih-DeCani, e.g. `hsd:-4` | a (1 - exp(-gamma t)) / (1 - exp(-gamma)) |
-| `kd:<rho>` | Kim-DeMets power, e.g. `kd:3` | a t^rho |
+| `obf` | Lan-DeMets O'Brien-Fleming-type | 2 − 2 Φ(z_(1−a/2) / √t) |
+| `pocock` | Lan-DeMets Pocock-type | a log(1 + (e − 1) t) |
+| `hsd:<gamma>` | Hwang-Shih-DeCani, e.g. `hsd:-4` | a (1 − exp(−γ t)) / (1 − exp(−γ)) |
+| `kd:<rho>` | Kim-DeMets power, e.g. `kd:3` | a t^ρ |
 | `user:<f1>,...,1` | User-specified, e.g. `user:0.1,0.4,1` | a times the given fraction at each look |
 
 Futility is non-binding unless you ask otherwise. `--binding-futility` (or
@@ -286,96 +241,35 @@ ignored. For the quickstart trial with `--efficacy hsd:-4 --futility hsd:-2`:
 
 Binding futility is not available with sample size re-estimation.
 
-#### Survival: re-estimating the number of events
+### Survival: accrual and calendar time
 
-For a time-to-event endpoint, `trialdesign ssr` re-estimates the number of events instead
-([`examples/phase3_survival_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_ssr.toml)).
-The interim is at half the planned events and the cap (`--max-factor`, default 1.5 for
-survival) applies to total events. The stage-2 statistic is the log-rank score increment
-between the two analyses, which has independent increments (Tsiatis 1981), so the same
-weighted test holds alpha. It needs the accrual model, which turns events into calendar time
-and patients. `--extend followup` (default) follows the enrolled patients longer;
-`--extend accrual` enrols more at the last accrual rate:
+For a survival design, an accrual model turns events into patients and calendar time
+(Lachin-Foulkes, exponential events and dropout, as in `rpact`). Give the control median and
+two of accrual time, accrual rate and follow-up; the third is solved
+([`examples/phase3_survival_accrual.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_accrual.toml)):
 
 ```bash
-trialdesign ssr --endpoint survival --hr 0.7 --median-control 12 --accrual-time 18 \
-  --followup 12 --z1 1.5 --nsim 10000
+trialdesign design --endpoint survival --hr 0.7 --looks 3 --median-control 12 \
+    --accrual-time 24 --followup 12 --dropout 0.05
+# 250 events, 391 patients; looks expected at months 16.6, 25.1 and 36.0
 ```
 
-```text
-Zone                 Interim z1  Observed / design effect  Total events
-Unfavourable            < 1.213                   < 0.611           248
-Promising        1.213 to 1.813            0.611 to 0.913    248 to 372
-Favourable       1.813 to 2.963                  >= 0.913           248
-Efficacy (stop)        >= 2.963                                     124
-```
+Piecewise accrual takes one rate per segment, e.g. `--accrual-time 6 --accrual-rate 10,25
+--followup 12` for a 6-month ramp-up (the end of accrual is solved).
 
-The output adds the expected study duration of each scenario and the month of the final
-analysis at the cap. Following 396 patients until 372 events takes until month 69 here, against
-37 with `--extend accrual`; check that before choosing the cap. `--nsim` checks the design with
-the patient-level simulator, which re-estimates the events at the interim log-rank z. Alpha is
-controlled only if the interim decision uses the log-rank statistic alone: using other data from
-stage-1 patients (progression, biomarkers) breaks the independent increments (Bauer and Posch
-2004; Jenkins, Stone and Jennison 2011).
-
-The defaults come from a grid over the cap (1.25, 1.5, 2) and `--cp-min` (0.2, 0.36, 0.5) for
-the same trial with 600 patients. At a hazard ratio of 0.75 against a design value of 0.7, the plain design has
-power 0.618; cap 1.5 with CP 0.36 to 0.8 gives 0.656 for 21 more events and 1.4 more months on
-average; a cap of 2 with `--cp-min 0.2` gives 0.699 for 51 more events and 4.6 more months. The
-power per extra event is about the same across the grid, so the cap mostly trades duration
-for power. The exact characteristics use the Schoenfeld information D r / (1 + r)^2; with
-unequal allocation the log-rank test's power departs from it by about a point, and the
-patient-level check is the better guide.
-
-## Command line
-
-| Command | Does |
-| --- | --- |
-| `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics; `--margin` for equivalence (group-sequential with `--looks`), `--analyse` for inference from observed z |
-| `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test, and for survival `--delay`, `--waning`, `--hazard-times` or `--kappa` simulate another event-time model and `--test fh:0,1` the weighted log-rank test |
-| `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
-| `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z; `--blinded` re-estimates the SD from an internal pilot |
-| `trialdesign graph` | Graphical multiple test: rejections, adjusted p-values and the path for observed p-values (`--p`), and power for given z-means and correlation (`--means`) |
-| `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics; `--engine patient` adds a patient-level check, `--analyse` an inference section, `--delay` (or another event model) a non-proportional hazards section, and a `[graph]` table a multiple-testing section |
-
-Each command takes flags, a TOML design file (`--config`), or both; flags override the file.
-Output is a plain table, or JSON with `--json`. Only `report --out` writes to disk, and every
-simulation prints its seed and the package version. Alpha always names its sidedness: fixed
-designs report two-sided alpha (default 0.05), group-sequential designs one-sided (default
-0.025). Run `trialdesign COMMAND --help` for every option.
-
-### JSON output
-
-`--json` output is a stable contract for scripts and pipelines:
-
-- every object carries `"schema_version": 1`, `"command"` and the package `"version"`;
-- within a schema version keys are only **added**; removing or renaming a key, or changing
-  its type, bumps `schema_version`;
-- non-finite numbers (an infinite boundary, the hazard ratio of a non-proportional event
-  model) are `null`, so any strict JSON parser reads the output;
-- on an error, `--json` prints `{"error": "<message>", "code": 2}` to stderr and exits
-  with status 2 (without `--json` the message is plain text).
-
-JSON Schemas (draft 2020-12) for each command are in
-[`docs/schema/`](https://github.com/rushadnihal/trialdesign/tree/main/docs/schema), one
-sub-schema per kind of output (fixed or group-sequential design, blinded or promising-zone
-re-estimation, and so on). They are generated from the cases in `tests/make_schemas.py`, and
-the tests fail if a key recorded for the current version disappears.
-
-```bash
-trialdesign design --config examples/phase3_survival.toml --json | jq '.sample_size.max_events_ceil'
-```
+### Simulation: score and patient engines
 
 `simulate` has two engines. The default, `score`, draws the canonical z-scale process: fast,
 and exactly what the boundaries assume. `--engine patient` (or `engine = "patient"` under
 `[simulation]`) simulates patients and the test you would run on them: the t-test for a
 normal endpoint, the Farrington-Manning z-test for a binary one (including non-inferiority),
-and the log-rank test with accrual and dropout for survival. It defaults to 10,000 trials and
-shows how far the large-sample theory holds for your design:
+and the log-rank test with accrual, permuted-block randomisation and dropout for survival. It
+defaults to 10,000 trials and shows how far the large-sample theory holds for your design:
 
 ```bash
 trialdesign simulate --endpoint survival --hr 0.7 --median-control 12 --accrual-time 24 \
   --followup 12 --looks 3 --engine patient --seed 1
+# power 0.794 (MC SE 0.004) against 0.800 exact; type I error 0.0254 (0.0016)
 ```
 
 For the phase 3 binary design of the
@@ -432,6 +326,171 @@ For that design (three looks, Pocock futility) the delay cuts power from 0.79 to
 because the first futility look stops 40% of trials instead of 9%; see the
 [design memo](https://github.com/rushadnihal/trialdesign/blob/main/docs/design_memo.md) addendum.
 
+### Sample size re-estimation
+
+`trialdesign ssr` plans a two-look design and adds a promising-zone rule (Mehta and Pocock
+2011): if the conditional power at the observed interim trend lies between `--cp-min` and
+`--cp-target`, the second stage grows until it reaches `--cp-target`, up to `--max-factor`
+times the planned maximum. The final test weights the stages by their planned information
+(Cui, Hung and Wang 1999), so alpha is controlled exactly whatever the interim shows
+([`examples/phase3_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_ssr.toml)):
+
+```bash
+trialdesign ssr --config examples/phase3_ssr.toml            # zones and exact OCs
+trialdesign ssr --config examples/phase3_ssr.toml --z1 1.5   # apply the rule to an interim
+```
+
+```text
+Zone                 Interim z1  Observed / design effect  Total patients
+Unfavourable            < 1.213                   < 0.611             352
+Promising        1.213 to 1.813            0.611 to 0.913      352 to 704
+Favourable       1.813 to 2.963                  >= 0.913             352
+Efficacy (stop)        >= 2.963                                       176
+
+Interim z1 = 1.500: promising zone, CP at observed trend 0.5855 (at design effect 0.7583); total patients 530, CP at observed trend after re-estimation 0.8000
+```
+
+Operating characteristics are exact (one-dimensional integration over the interim z), with a
+simulated check. With these defaults (CP 0.36 to 0.8, cap 2x, interim at half), power at
+the design effect rises from 0.800 to 0.834 for 37 more patients on average; at 70% of the
+design effect, from 0.500 to 0.548. Pooling all patients in a naive final test would also hold
+alpha for this promising-zone rule (0.0244), but not for a rule that adapts in every zone
+(0.0303 with `--cp-min 0`), which is why the weighted test is always used.
+
+![Re-estimated sample size against the interim z, and power curves](https://raw.githubusercontent.com/rushadnihal/trialdesign/main/docs/img/ssr.png)
+
+#### Survival: re-estimating the number of events
+
+For a time-to-event endpoint, `trialdesign ssr` re-estimates the number of events instead
+([`examples/phase3_survival_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_ssr.toml)).
+The interim is at half the planned events and the cap (`--max-factor`, default 1.5 for
+survival) applies to total events. The stage-2 statistic is the log-rank score increment
+between the two analyses, which has independent increments (Tsiatis 1981), so the same
+weighted test holds alpha. It needs the accrual model, which turns events into calendar time
+and patients. `--extend followup` (default) follows the enrolled patients longer;
+`--extend accrual` enrols more at the last accrual rate:
+
+```bash
+trialdesign ssr --endpoint survival --hr 0.7 --median-control 12 --accrual-time 18 \
+  --followup 12 --z1 1.5 --nsim 10000
+```
+
+```text
+Zone                 Interim z1  Observed / design effect  Total events
+Unfavourable            < 1.213                   < 0.611           248
+Promising        1.213 to 1.813            0.611 to 0.913    248 to 372
+Favourable       1.813 to 2.963                  >= 0.913           248
+Efficacy (stop)        >= 2.963                                     124
+```
+
+The output adds the expected study duration of each scenario and the month of the final
+analysis at the cap. Following 396 patients until 372 events takes until month 69 here, against
+37 with `--extend accrual`; check that before choosing the cap. `--nsim` checks the design with
+the patient-level simulator, which re-estimates the events at the interim log-rank z. Alpha is
+controlled only if the interim decision uses the log-rank statistic alone: using other data from
+stage-1 patients (progression, biomarkers) breaks the independent increments (Bauer and Posch
+2004; Jenkins, Stone and Jennison 2011).
+
+The defaults come from a grid over the cap (1.25, 1.5, 2) and `--cp-min` (0.2, 0.36, 0.5) for
+the same trial with 600 patients. At a hazard ratio of 0.75 against a design value of 0.7, the
+plain design has power 0.618; cap 1.5 with CP 0.36 to 0.8 gives 0.656 for 21 more events and
+1.4 more months on average; a cap of 2 with `--cp-min 0.2` gives 0.699 for 51 more events and
+4.6 more months. The power per extra event is about the same across the grid, so the cap mostly
+trades duration for power. The exact characteristics use the Schoenfeld information
+D r / (1 + r)^2; with unequal allocation the log-rank test's power departs from it by about a
+point, and the patient-level check is the better guide.
+
+#### Blinded re-estimation of the SD
+
+`trialdesign ssr --blinded` (normal endpoint, fixed design) re-estimates the SD from an
+internal pilot of `--pilot-n` patients **without unblinding** (Kieser and Friede 2003): the
+one-sample variance of the pooled pilot data, optionally minus its bias at the design
+difference (`--sd-adjusted`). The sample size is recomputed with the usual formula, kept
+between the planned size (`--floor planned`, the default; or `--floor pilot`) and
+`--max-factor` times it, and the final one-sided t-test uses all patients. Type I error,
+power and the sample size distribution are simulated for true SDs of 0.75 to 1.5 times the
+planning SD; `--pilot-sd` applies the rule to an observed pilot
+([`examples/phase3_blinded_ssr.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_blinded_ssr.toml)):
+
+```bash
+trialdesign ssr --config examples/phase3_blinded_ssr.toml
+```
+
+```text
+True SD  Type I error   Power  Mean N  N 5%-95%  P(N at cap)
+7.5000         0.0247  0.9604   126.0   126-126       0.0000
+10.0000        0.0255  0.8259   140.5   126-178     8.00e-05
+12.5000        0.0247  0.7947   203.0   148-252       0.1153
+15.0000        0.0254  0.7380   245.6   210-252       0.7684
+
+Pilot SD 12: variance used 144.0000; n_control 91, n_treatment 91, total 182
+```
+
+Planned for SD 10, the trial keeps about 80% power when the SD is really 12.5 (a fixed
+design of 126 would have about 61%), until the cap of twice the planned size binds; the type
+I error stays at alpha within simulation error.
+
+### Bayesian go/no-go interim
+
+`trialdesign bayes` designs a phase 2 interim on a binary endpoint with independent beta
+priors. At the interim the predictive probability of success (PPoS) of the final analysis
+decides go, no-go or continue; the trial succeeds if P(p_T > p_C | data) reaches the success
+threshold at the end
+([`examples/phase2_binary_bayes.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase2_binary_bayes.toml)):
+
+```bash
+trialdesign bayes --pc 0.30 --pt 0.45 --n 60 --interim 30 --go 0.9 --nogo 0.1 --xc 6 --xt 12
+```
+
+```text
+Operating characteristics (exact)
+Quantity             H0 (p_T = p_C = 0.3)  H1 (p_T = 0.45)
+P(success)                         0.0227           0.3560
+P(go at interim)                   0.0083           0.1093
+P(no-go at interim)                0.7519           0.2928
+P(continue)                        0.2398           0.5979
+Expected N (total)                74.3885          95.8733
+
+Interim 6/30 control vs 12/30 treatment: P(p_T > p_C | data) = 0.9515, PPoS = 0.6062, decision: continue
+```
+
+Everything is exact (no simulation). The default success threshold, 0.98, holds the worst-case
+type I error over common response rates at 0.0232; `--calibrate` re-calibrates it for another
+design, and `--design-prior-c` / `--design-prior-t` give the assurance (probability of success
+averaged over a design prior). The
+[design memo](https://github.com/rushadnihal/trialdesign/blob/main/docs/design_memo.md) uses
+this command to design a fictional phase 2 trial.
+
+### Inference at the end of the trial
+
+`--analyse` takes the z-statistics observed so far, one per look, with positive favouring
+treatment, and reports inference that respects the group-sequential design:
+
+```bash
+trialdesign design --endpoint survival --hr 0.7 --looks 3 --analyse 1.2,2.6
+```
+
+```text
+Look    Info       z  Efficacy z  Estimate (HR)   Repeated 95% CI  Repeated p
+1     0.3333  1.2000      3.7103         0.7688  0.3410 to 1.7333      0.3629
+2     0.6667  2.6000      2.5114         0.6684  0.4530 to 0.9864      0.0209
+
+Look 2 (efficacy boundary crossed). Stage-wise ordering: p = 0.004702, median-unbiased HR 0.6685, 95% CI 0.4934 to 0.9059.
+```
+
+Repeated confidence intervals (Jennison and Turnbull 1989) and repeated p-values are valid at
+every look, whether or not the trial stops there. Once a boundary is crossed, or at the last
+look, the stage-wise ordering gives the p-value, the median-unbiased estimate and its confidence
+interval (Tsiatis, Rosner and Mehta 1984). These account for the looks already taken: the
+estimate is median-unbiased over all the ways the trial could have stopped, and the p-value and
+interval keep their error rates, which the fixed-sample ones do not. With O'Brien-Fleming-type
+boundaries the difference is often small (in the example the naive and stage-wise values are
+close), and at the first look the two coincide; it grows with Pocock-type boundaries. Effects are
+mapped from the z-scale with the planned information, so for a hazard ratio they use
+Schoenfeld's D/4. If the looks fell at other information fractions, rebuild the design with
+`--looks` at the observed fractions first. A non-binding futility boundary is ignored, as it is
+for the design's type I error.
+
 ### Graphical multiple testing
 
 A confirmatory trial with two doses, each with a primary and a key secondary endpoint, tests
@@ -465,11 +524,51 @@ and 0.366 for H1 to H4, 0.814 to reject at least one and 0.293 to reject all fou
 the usual procedures: `--preset holm:3`, `bonferroni:3`, `fixed-sequence:3`,
 `fallback:0.5,0.3,0.2` and `two-doses`. The graph is a Bonferroni-based shortcut of a closed
 test, so it controls the family-wise error rate for any correlation; it is for fixed designs
-(one analysis). A `[graph]` table in a file given to `trialdesign report` adds a multiple-testing
-section, with the graph drawn (weights, transitions and the power of each hypothesis) in
-`graph.png`.
+(one analysis).
+
+### Design reports
+
+`trialdesign report --out DIR` writes `report.md` and its plots for whatever the design file
+or flags describe:
+
+| Design | Plots |
+| --- | --- |
+| Group-sequential design | `boundaries.png`, `oc.png` |
+| Promising-zone re-estimation | adds `ssr.png` |
+| Bayesian interim | `bayes_oc.png`, `decision_map.png` |
+| Event model (`--delay`, `--waning`, `--hazard-times`, `--kappa` or `[hazards]`) | adds `survival.png` and a non-proportional hazards section |
+| `[graph]` table | `graph.png` (weights, transitions and the power of each hypothesis) and a multiple-testing section |
+
+`--nsim` adds simulated checks, `--engine patient` a patient-level check, and `--analyse` an
+inference section. Blinded re-estimation is reported by `trialdesign ssr --blinded` only.
+Without `--out` the Markdown is printed.
+
+### JSON output
+
+`--json` output is a stable contract for scripts and pipelines:
+
+- every object carries `"schema_version": 1`, `"command"` and the package `"version"`;
+- within a schema version keys are only **added**; removing or renaming a key, or changing
+  its type, bumps `schema_version`;
+- non-finite numbers (an infinite boundary, the hazard ratio of a non-proportional event
+  model) are `null`, so any strict JSON parser reads the output;
+- on an error, `--json` prints `{"error": "<message>", "code": 2}` to stderr and exits
+  with status 2 (without `--json` the message is plain text).
+
+JSON Schemas (draft 2020-12) for each command are in
+[`docs/schema/`](https://github.com/rushadnihal/trialdesign/tree/main/docs/schema), one
+sub-schema per kind of output (fixed or group-sequential design, blinded or promising-zone
+re-estimation, and so on). They are generated from the cases in `tests/make_schemas.py`, and
+the tests fail if a key recorded for the current version disappears.
+
+```bash
+trialdesign design --config examples/phase3_survival.toml --json | jq '.sample_size.max_events_ceil'
+# 307
+```
 
 ## Python API
+
+Everything the command line does is available from Python:
 
 ```python
 from trialdesign import bayes, boundaries, fixed, simulate
@@ -515,6 +614,16 @@ t.rejected, t.adjusted_p, t.steps
 pw = multiplicity.graph_power(g, means=[2.8, 2.5, 2.2, 2.0], correlation=0.5, seed=1)
 pw.local_power, pw.any_power, pw.all_power
 
+from trialdesign import blinded, equivalence, inference
+
+res = inference.analyse(d, [1.2, 2.6])  # observed z per look
+res.repeated_p, res.p_value, res.median_unbiased_drift
+eq = equivalence.group_sequential_equivalence_normal(0.5, sd=1, info_rates=3, power=0.9)
+eq.look_n_control(), eq.expected_n_control(), eq.simulate(n_sim=10_000, seed=1)
+ssr = blinded.BlindedSSR(delta=5, sd=10, pilot_n=60)
+ssr.reestimate(144.0).n_total  # from the one-sample variance of the blinded pilot: 182
+ssr.simulate(sd=12.5, n_sim=100_000, seed=1).rejection_rate
+
 b = bayes.bayesian_interim_design(n_interim=30, n_final=60)  # control patients per analysis
 b.ppos(6, 12), b.decide(6, 12)  # PPoS and go / no-go / continue at the interim
 b.operating_characteristics(0.30, 0.30).prob_success  # exact type I error
@@ -522,23 +631,27 @@ b.assurance(0.30, (4.5, 5.5)).prob_success  # Beta(4.5, 5.5) design prior on p_T
 bayes.calibrate_success_threshold(30, 60, alpha_one_sided=0.025)  # 0.9789
 ```
 
-**Methods in one paragraph.** Every group-sequential design is reduced to a drift on the
-canonical z-scale. Efficacy boundaries spend alpha with any of the spending functions above and
-are solved by Jennison and Turnbull's recursive numerical integration, cross-checked against
-`scipy`'s multivariate normal to 1e-4. Futility spends beta under the alternative; when it is
-binding, efficacy and futility boundaries are solved look by look over the same continuation
-region. The simulator draws independent increments of the score process, one
-`(n_sim, looks)` matrix per batch, so 100,000 trials take well under a second. The
-patient-level survival simulator checks that approximation with real patients: piecewise
-accrual, permuted-block randomisation, exponential events and dropout, looks at the calendar
-time of the planned event counts, and the log-rank test, vectorised over trials (10,000 trials
-of 600 patients take a few seconds). The Bayesian
-interim computes PPoS exactly by enumerating the beta-binomial posterior predictive, so
-decisions carry no Monte Carlo error and operating characteristics and assurance are exact.
-The default final success threshold, 0.98, is calibrated so the reference design (30 of 60
-patients per arm at the interim) has a worst-case type I error of 0.0232, below one-sided
-0.025, over common response rates from 0.05 to 0.95. `bayes --calibrate` re-calibrates it for
-other designs.
+## Methods
+
+Every group-sequential design is reduced to a drift on the canonical z-scale. Efficacy
+boundaries spend alpha with any of the spending functions above and are solved by Jennison and
+Turnbull's recursive numerical integration, cross-checked against `scipy`'s multivariate normal
+to 1e-4. Futility spends beta under the alternative; when it is binding, efficacy and futility
+boundaries are solved look by look over the same continuation region. The score-engine
+simulator draws independent increments of the score process, one `(n_sim, looks)` matrix per
+batch, so 100,000 trials take well under a second.
+
+The patient-level survival simulator checks that approximation with real patients: piecewise
+accrual, permuted-block randomisation, exponential or piecewise-exponential events (or Weibull),
+drawn by inverting the cumulative hazard, exponential dropout, looks at the calendar time of the
+planned event counts, and the log-rank or Fleming-Harrington test, vectorised over trials
+(10,000 trials of 600 patients take a few seconds).
+
+The Bayesian interim computes PPoS exactly by enumerating the beta-binomial posterior
+predictive, so decisions carry no Monte Carlo error and operating characteristics and assurance
+are exact. The default final success threshold, 0.98, is calibrated so the reference design (30
+of 60 patients per arm at the interim) has a worst-case type I error of 0.0232, below one-sided
+0.025, over common response rates from 0.05 to 0.95.
 
 ## Validated against
 
@@ -578,41 +691,24 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Group-sequential equivalence: critical values, sample size, per-look probability of declaring equivalence at the design difference and at both margins (normal and binary, OBF and Pocock) | `rpact::getDesignGroupSequential` and `mvtnorm::pmvnorm` rectangles; Farrington-Manning by numerical maximisation | 7 | 1e-6 (probabilities), 1e-5 (sample size) |
 | Fleming-Harrington FH(rho, gamma) weighted log-rank statistic | Computed in R; FH(rho, 0) also `survival::survdiff(rho = ...)` | 15 | 1e-10 |
 
-Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
-rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/bayes_reference_values.json) and
-[`tests/ni_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ni_reference_values.json) and
-[`tests/accrual_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/accrual_reference_values.json) and
-[`tests/ssr_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_reference_values.json) and
-[`tests/spending_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/spending_reference_values.json) and
-[`tests/patients_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_reference_values.json) and
-[`tests/patients_endpoints_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_endpoints_reference_values.json) and
-[`tests/ssr_survival_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_survival_reference_values.json) and
-[`tests/inference_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/inference_reference_values.json) and
-[`tests/nph_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/nph_reference_values.json) (rpact 3.4.0) and
-[`tests/multiplicity_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/multiplicity_reference_values.json) (mvtnorm 1.2.4).
-Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
-z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
-with no patients left and increases with treatment responders, and that every simulated rate
-lies within a few Monte Carlo SEs of its exact value.
+The values are in [`tests/*_reference_values.json`](https://github.com/rushadnihal/trialdesign/tree/main/tests)
+(R 4.5.3, gsDesign 3.11.0, rpact 5.0.0; the non-proportional hazards values with rpact 3.4.0,
+the graph power with mvtnorm 1.2.4), and the scripts that produce them in
+[`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these,
+property tests check that one look gives z = 1.96, that the per-look rejection probabilities
+under H0 sum to alpha, that PPoS is 0 or 1 with no patients left and increases with treatment
+responders, and that every simulated rate lies within a few Monte Carlo SEs of its exact value.
 
-To regenerate (needs `gsDesign` and `rpact`; the Bayesian script needs base R only):
+To regenerate a file (needs `gsDesign`, `rpact`, `mvtnorm` and `survival`; the Bayesian script
+needs base R only), run its script, for example:
 
 ```bash
 Rscript tests/r/reference_values.R > ref.json && mv ref.json tests/reference_values.json
-Rscript tests/r/bayes_reference_values.R > bayes.json && mv bayes.json tests/bayes_reference_values.json
-Rscript tests/r/ni_reference_values.R > ni.json && mv ni.json tests/ni_reference_values.json
-Rscript tests/r/accrual_reference_values.R > acc.json && mv acc.json tests/accrual_reference_values.json
-Rscript tests/r/ssr_reference_values.R > ssr.json && mv ssr.json tests/ssr_reference_values.json
-Rscript tests/r/spending_reference_values.R > sp.json && mv sp.json tests/spending_reference_values.json
-Rscript tests/r/patients_reference_values.R > pat.json && mv pat.json tests/patients_reference_values.json
-Rscript tests/r/patients_endpoints_reference_values.R > pe.json && mv pe.json tests/patients_endpoints_reference_values.json
-Rscript tests/r/ssr_survival_reference_values.R > ssr.json && mv ssr.json tests/ssr_survival_reference_values.json
-Rscript tests/r/inference_reference_values.R > inf.json && mv inf.json tests/inference_reference_values.json
 Rscript tests/r/nph_reference_values.R > nph.json && mv nph.json tests/nph_reference_values.json
-Rscript tests/r/multiplicity_reference_values.R > mult.json && mv mult.json tests/multiplicity_reference_values.json
-Rscript tests/r/blinded_reference_values.R > blinded.json && mv blinded.json tests/blinded_reference_values.json
-Rscript tests/r/gs_equivalence_reference_values.R > gseq.json && mv gseq.json tests/gs_equivalence_reference_values.json
 ```
+
+Each `tests/r/<name>.R` writes `tests/<name>.json`, except `fixed_reference_values.R` and
+`gsd_reference_values.R`, which `reference_values.R` sources.
 
 ## Development
 
@@ -624,11 +720,10 @@ ruff check . && ruff format --check .
 python tests/make_schemas.py   # after a deliberate change of the --json output
 ```
 
-Changes are listed in [CHANGELOG.md](https://github.com/rushadnihal/trialdesign/blob/main/CHANGELOG.md).
 Releases are built and published by [`.github/workflows/release.yml`](https://github.com/rushadnihal/trialdesign/blob/main/.github/workflows/release.yml)
 when a `v*` tag is pushed; see [RELEASING.md](https://github.com/rushadnihal/trialdesign/blob/main/RELEASING.md).
 
-## Future work
+## Scope and future work
 
 The package is deliberately narrow: two arms and one primary endpoint. Not yet covered:
 
