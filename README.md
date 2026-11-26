@@ -18,7 +18,9 @@ package for:
 - inference at the end of a group-sequential trial: repeated confidence intervals and p-values,
   and the stage-wise p-value, median-unbiased estimate and confidence interval,
 - exact and Monte Carlo operating characteristics, including a patient-level survival
-  simulator (accrual, dropout, event-driven looks, log-rank test), and a Markdown design report.
+  simulator (accrual, dropout, event-driven looks, log-rank test) that can also simulate
+  delayed, waning or crossing treatment effects, Weibull event times and the
+  Fleming-Harrington weighted log-rank test, and a Markdown design report.
 
 Every number is checked against R (`rpact`, `gsDesign`, `stats`). See [Validated against](#validated-against).
 
@@ -275,7 +277,7 @@ patient-level check is the better guide.
 | Command | Does |
 | --- | --- |
 | `trialdesign design` | Fixed or group-sequential sample size and boundaries, with exact operating characteristics; `--margin` for equivalence, `--analyse` for inference from observed z |
-| `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test |
+| `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test, and for survival `--delay`, `--waning`, `--hazard-times` or `--kappa` simulate another event-time model and `--test fh:0,1` the weighted log-rank test |
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
 | `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z |
 | `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics; `--engine patient` adds a patient-level check, `--analyse` an inference section |
@@ -304,6 +306,40 @@ patient-level trials give a one-sided type I error of 0.0266 (MC SE 0.0005) rath
 the z-test is slightly liberal at 172 patients. `report --nsim N --engine patient` keeps the
 score-engine simulation of N trials and adds 10,000 patient-level trials beside it, with the
 exact values, in a "Patient-level check" table.
+
+### Non-proportional hazards
+
+A survival design is sized under proportional hazards, but an immunotherapy often has no
+effect for the first months. The patient engine simulates the design under another event-time
+model while keeping its sample size and boundaries: a delayed effect (`--delay`, HR 1 for that
+many months, then `--hr-after`, default `--hr`), a waning effect (`--waning`), any
+piecewise-constant hazards per arm (`--hazard-times`, `--hazards-control`,
+`--hazards-treatment`), or Weibull event times with proportional hazards (`--kappa`). H0 gives
+both arms the control distribution, so the type I error is checked under the same model.
+
+```bash
+trialdesign simulate --config examples/phase3_survival_nph.toml
+```
+
+[`examples/phase3_survival_nph.toml`](https://github.com/rushadnihal/trialdesign/blob/main/examples/phase3_survival_nph.toml)
+sizes a trial for HR 0.70 (248 events, 371 patients, one interim at half the events) and
+simulates a 4-month delay. With 100,000 trials per scenario:
+
+| Scenario | Test | Power | Type I error |
+| --- | --- | --- | --- |
+| Proportional hazards (`--delay 0`), interim at 50% | log-rank | 0.799 | 0.0258 |
+| 4-month delay, interim at 50% | log-rank | 0.487 | 0.0256 |
+| 4-month delay, one final analysis (`--looks 1`) | log-rank | 0.486 | 0.0249 |
+| 4-month delay, one final analysis | FH(0,1) (`--test fh:0,1`) | 0.585 | 0.0254 |
+| Proportional hazards, one final analysis | FH(0,1) | 0.671 | 0.0255 |
+
+The delay costs about 30 points of power. FH(0,1), which weights late differences, wins back
+10 of them, but under proportional hazards it would cost 13 (MC SE about 0.0016 for power and
+0.0005 for type I error). The weighted test is supported for a single final analysis only: its
+group-sequential correlation is not that of the log-rank test, so the usual boundaries would
+not hold alpha. A `[hazards]` table in a design file takes the same settings
+(`delay`, `waning`, `hr_after`, `hazard_times`, `hazards_control`, `hazards_treatment`,
+`kappa`), and `test` goes under `[simulation]`.
 
 ## Python API
 
@@ -334,6 +370,14 @@ pd = patients.simulate_design_patients(  # H0 and H1, like simulate.simulate_des
     d, "binary", n_control=180, p_control=0.30, p_treatment=0.45, n_sim=10_000, seed=1
 )
 pd.type_i_error, pd.power
+
+from trialdesign.hazards import EventModel
+
+delayed = EventModel.delayed_effect(study.hazard_control, 0.70, delay=4)
+study.look_times(d.info_rates, delayed)  # expected calendar time of each look under the model
+nph = patients.simulate_survival(study, d.info_rates, d.efficacy, model=delayed, seed=1)
+h0 = patients.simulate_survival(study, d.info_rates, d.efficacy, model=delayed.null(), seed=1)
+fh = patients.simulate_survival(study, [1.0], [1.96], model=delayed, fh=(0, 1), seed=1)
 
 b = bayes.bayesian_interim_design(n_interim=30, n_final=60)  # control patients per analysis
 b.ppos(6, 12), b.decide(6, 12)  # PPoS and go / no-go / continue at the interim
@@ -390,6 +434,9 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | End-of-trial inference: repeated CIs and p-values, stage-wise p-value, median-unbiased estimate and CI (OBF, Pocock, HSD, Kim-DeMets; non-binding and binding futility) | `rpact::getRepeatedConfidenceIntervals`, `getRepeatedPValues`, `getFinalPValue`, `getFinalConfidenceInterval` | 6 | 1e-3 (agree to about 1e-6) |
 | Equivalence (TOST) sample size and power | closed form at zero difference; simulation of the actual tests | 9 | 1e-4; 3 MC SE (normal), conservative within 1 point (binary) |
 | Survival event re-estimation, patient level: power, type I error, interim stops, expected events, duration and patients | `rpact::getSimulationSurvival` with `conditionalPower` (100,000 runs) | 4 | 3 MC SE |
+| Expected events under piecewise-exponential (delayed, waning, crossing; with dropout and piecewise accrual) and Weibull event times | `rpact::getEventProbabilities` | 6 | 1e-6 (share of patients) |
+| Patient-level simulation under non-proportional hazards and Weibull events: power, type I error, per-look stopping, look times, duration, expected patients and events | `rpact::getSimulationSurvival` with `piecewiseSurvivalTime` or `kappa` (100,000 runs) | 4 | 2 MC SE (power), 3 MC SE (per look, calendar) |
+| Fleming-Harrington FH(rho, gamma) weighted log-rank statistic | Computed in R; FH(rho, 0) also `survival::survdiff(rho = ...)` | 15 | 1e-10 |
 
 Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
 rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/bayes_reference_values.json) and
@@ -400,7 +447,8 @@ rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnih
 [`tests/patients_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_reference_values.json) and
 [`tests/patients_endpoints_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_endpoints_reference_values.json) and
 [`tests/ssr_survival_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_survival_reference_values.json) and
-[`tests/inference_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/inference_reference_values.json) (rpact 3.4.0).
+[`tests/inference_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/inference_reference_values.json) and
+[`tests/nph_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/nph_reference_values.json) (rpact 3.4.0).
 Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -419,6 +467,7 @@ Rscript tests/r/patients_reference_values.R > pat.json && mv pat.json tests/pati
 Rscript tests/r/patients_endpoints_reference_values.R > pe.json && mv pe.json tests/patients_endpoints_reference_values.json
 Rscript tests/r/ssr_survival_reference_values.R > ssr.json && mv ssr.json tests/ssr_survival_reference_values.json
 Rscript tests/r/inference_reference_values.R > inf.json && mv inf.json tests/inference_reference_values.json
+Rscript tests/r/nph_reference_values.R > nph.json && mv nph.json tests/nph_reference_values.json
 ```
 
 ## Development
@@ -444,7 +493,8 @@ The package is deliberately narrow: two arms and one primary endpoint. Not yet c
 - multiplicity across several endpoints (graphical testing);
 - response-adaptive randomisation;
 - Stan or PyMC models and dynamic borrowing;
-- non-proportional hazards and non-exponential event times in the patient-level simulator.
+- designing for non-proportional hazards analytically (average hazard ratio, RMST or max-combo
+  sample size), and group-sequential weighted log-rank tests.
 
 ## License
 

@@ -2,6 +2,31 @@
 
 All notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Non-proportional hazards and Weibull event times in the patient-level survival simulator**
+  (`trialdesign.hazards`): `EventModel.delayed_effect`, `waning_effect`, `piecewise` (any
+  piecewise-constant hazards per arm) and `weibull` (proportional hazards with a Weibull
+  baseline, `rpact`'s parameterisation). `patients.simulate_survival(..., model=...)` and
+  `simulate_design_patients(..., model=...)` draw event times by inverting the cumulative
+  hazard; H0 uses `model.null()`. One hazard interval gives exactly the v0.3 trials for the
+  same seed. Validated against `rpact::getSimulationSurvival` with `piecewiseSurvivalTime` and
+  `kappa`.
+- `hazards.expected_events` and a `model` argument to `SurvivalStudy.events_at`,
+  `time_of_events` and `look_times`: expected events and look times under any of those
+  models, validated against `rpact::getEventProbabilities`.
+- **Fleming-Harrington weighted log-rank test** (`patients.weighted_logrank_z`, and
+  `simulate_survival(..., fh=(rho, gamma))`) for a single final analysis. Validated against
+  an R implementation and `survival::survdiff`.
+- `trialdesign simulate --engine patient` takes `--delay`, `--waning`, `--hr-after`,
+  `--hazard-times`, `--hazards-control`, `--hazards-treatment`, `--kappa` (or a `[hazards]`
+  table) and `--test fh:<rho>,<gamma>` (or `test` under `[simulation]`). JSON output names the
+  event model and the test.
+- `examples/phase3_survival_nph.toml`: a design sized for HR 0.70 and simulated with a
+  4-month delayed effect.
+
 ## 0.3.0 (2026-11-26)
 
 A patient-level simulator next to the score-process engine, survival sample size re-estimation
