@@ -2,7 +2,7 @@
 
 All notable changes to this project. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 0.3.0 (2026-11-25)
+## 0.3.0 (2026-11-26)
 
 A patient-level simulator next to the score-process engine, survival sample size re-estimation
 on the events scale, end-of-trial inference and equivalence designs. v0.2 config files and
