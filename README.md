@@ -344,6 +344,28 @@ simulation prints its seed and the package version. Alpha always names its sided
 designs report two-sided alpha (default 0.05), group-sequential designs one-sided (default
 0.025). Run `trialdesign COMMAND --help` for every option.
 
+### JSON output
+
+`--json` output is a stable contract for scripts and pipelines:
+
+- every object carries `"schema_version": 1`, `"command"` and the package `"version"`;
+- within a schema version keys are only **added**; removing or renaming a key, or changing
+  its type, bumps `schema_version`;
+- non-finite numbers (an infinite boundary, the hazard ratio of a non-proportional event
+  model) are `null`, so any strict JSON parser reads the output;
+- on an error, `--json` prints `{"error": "<message>", "code": 2}` to stderr and exits
+  with status 2 (without `--json` the message is plain text).
+
+JSON Schemas (draft 2020-12) for each command are in
+[`docs/schema/`](https://github.com/rushadnihal/trialdesign/tree/main/docs/schema), one
+sub-schema per kind of output (fixed or group-sequential design, blinded or promising-zone
+re-estimation, and so on). They are generated from the cases in `tests/make_schemas.py`, and
+the tests fail if a key recorded for the current version disappears.
+
+```bash
+trialdesign design --config examples/phase3_survival.toml --json | jq '.sample_size.max_events_ceil'
+```
+
 `simulate` has two engines. The default, `score`, draws the canonical z-scale process: fast,
 and exactly what the boundaries assume. `--engine patient` (or `engine = "patient"` under
 `[simulation]`) simulates patients and the test you would run on them: the t-test for a
@@ -584,6 +606,7 @@ pip install -e ".[dev]"
 pytest
 pytest -m slow   # on demand: 100,000-trial type I error check of the patient-level simulator
 ruff check . && ruff format --check .
+python tests/make_schemas.py   # after a deliberate change of the --json output
 ```
 
 Changes are listed in [CHANGELOG.md](https://github.com/rushadnihal/trialdesign/blob/main/CHANGELOG.md).
