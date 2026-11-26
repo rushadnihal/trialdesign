@@ -785,6 +785,40 @@ def _patient_simulation(
     )
 
 
+def _nph_report(
+    inp: _DesignInputs,
+    gsd: GroupSequentialDesign,
+    s: dict[str, Any],
+    model: EventModel,
+    fh: tuple[float, float] | None,
+    seed: int,
+) -> tuple[EventModel, float, dict[str, Any]]:
+    """The design under PH and under the event model, 10,000 patient-level trials each."""
+    size, eff = s["sample_size"], inp.effect
+    if eff.get("hr0", 1.0) != 1.0:
+        raise ValueError("the non-proportional hazards section is for superiority (hr0 = 1)")
+    if "accrual_inputs" not in eff:
+        raise ValueError(
+            "an event model needs an accrual model: give --median-control and two of "
+            "--accrual-time, --accrual-rate and --followup"
+        )
+    study = accrual.survival_study(
+        size["max_events"], eff["hr"], allocation=inp.allocation, **eff["accrual_inputs"]
+    )
+    summary = report.nph_summary(
+        gsd,
+        study,
+        model,
+        _describe_model(model, None).removesuffix(" and the log-rank test"),
+        n_total=size["max_n_total_ceil"],
+        events=size["max_events_ceil"],
+        fh=fh,
+        n_sim=_PATIENT_NSIM,
+        seed=seed,
+    )
+    return model, eff["hr"], summary
+
+
 def _resolve_bayes(cfg: config.Config, flags: dict[str, Any]):
     b = config.merge(cfg, "bayes", flags)
     for key in ("pc", "pt", "n", "interim"):
@@ -1564,6 +1598,14 @@ def report_cmd(
     nsim: NsimOpt = None,
     seed: SeedOpt = None,
     engine: EngineOpt = None,
+    delay: DelayOpt = None,
+    waning: WaningOpt = None,
+    hr_after: HrAfterOpt = None,
+    hazard_times: HazardTimesOpt = None,
+    hazards_control: HazardsControlOpt = None,
+    hazards_treatment: HazardsTreatmentOpt = None,
+    kappa: KappaOpt = None,
+    test: TestOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Markdown design report with PNG plots of boundaries and operating characteristics.
@@ -1572,19 +1614,24 @@ def report_cmd(
     --looks) and the Bayesian interim ([bayes], or --n and --interim), whichever are given.
     Simulated checks are added when --nsim or [simulation] is set; with --engine patient,
     10,000 patient-level trials are shown next to the score-engine simulation. --analyse adds
-    inference from observed z-statistics. Nothing is written to disk without --out.
+    inference from observed z-statistics. An event model (--delay, --waning, --hazard-times or
+    --kappa, or a [hazards] table) adds a non-proportional hazards
+    section (10,000 patient-level trials under proportional hazards and under the scenario,
+    with survival curves), and a [graph] table a multiple-testing section with the graph
+    drawn. Nothing is written to disk without --out.
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json", "out")}
     try:
         cfg = config.load_config(config_file)
         want_gsd = "design" in cfg or endpoint is not None
         want_bayes = "bayes" in cfg or n is not None or interim is not None
-        if not (want_gsd or want_bayes):
+        want_graph = "graph" in cfg
+        if not (want_gsd or want_bayes or want_graph):
             raise ValueError(
                 "nothing to report: give --config, --endpoint and --looks, or --n and --interim"
             )
         n_sim, seed_used = _simulation_settings(cfg, flags, None)
-        gsd_part = bayes_part = ssr_part = None
+        gsd_part = bayes_part = ssr_part = nph_part = graph_part = None
         patient_sim = analysis = None
         adapt = _resolve_adaptation(cfg, flags, required=False) if want_gsd else None
         if adapt is not None:
@@ -1597,11 +1644,16 @@ def report_cmd(
             gsd, s = _sequential(inp)
             sim = None
             patient_engine = _engine(cfg, flags) == "patient"
-            if cfg.get("hazards") or config.merge(cfg, "simulation", flags).get("test"):
-                raise ValueError(
-                    "the report does not cover event models or the FH test yet; "
-                    "use trialdesign simulate --engine patient"
-                )
+            model, fh = _event_model(cfg, flags, inp), _test(cfg, flags, inp)
+            if fh is not None and model is None:
+                raise ValueError("the report's FH test goes with an event model: add [hazards]")
+            if model is not None:
+                if n_sim is None:
+                    raise ValueError(
+                        "the non-proportional hazards section simulates patients: give --nsim "
+                        "(or nsim under [simulation])"
+                    )
+                nph_part = _nph_report(inp, gsd, s, model, fh, seed_used)
             if patient_engine and n_sim is None:
                 raise ValueError("the patient engine needs --nsim (or nsim under [simulation])")
             if n_sim is not None:
@@ -1617,6 +1669,11 @@ def report_cmd(
         if want_bayes:
             bd, extra = _resolve_bayes(cfg, flags)
             bayes_part = (bd, *_bayes_run(bd, extra, n_sim, seed_used))
+        if want_graph:
+            g, alpha, test, power, _, g_seed = _graph_run(
+                cfg, {} if n_sim is None else {"nsim": n_sim}, None if n_sim is None else seed_used
+            )
+            graph_part = (g, report.graph_summary(g, alpha, test, power, g_seed))
         source = None if config_file is None else str(config_file)
         files: list[Path] = []
         if out is not None:
@@ -1629,6 +1686,8 @@ def report_cmd(
                 ssr_design=ssr_part,
                 patient=patient_sim,
                 analysis=analysis,
+                nph=None if nph_part is None else nph_part[:3],
+                graph=graph_part,
             )
     except ValueError as exc:
         raise _fail(exc, as_json) from exc
@@ -1644,6 +1703,10 @@ def report_cmd(
             payload["bayes"], payload["bayes_simulation"] = bayes_part[1], bayes_part[2]
         if ssr_part is not None:
             payload["ssr"] = ssr_part[1]
+        if nph_part is not None:
+            payload["nph"] = nph_part[2]
+        if graph_part is not None:
+            payload["graph"] = graph_part[1]
         _print_json("report", payload)
         return
     if out is not None:
@@ -1660,10 +1723,14 @@ def report_cmd(
         )
         if analysis is not None:
             typer.echo(report.inference_markdown(analysis) + "\n")
+    if nph_part is not None:
+        typer.echo(report.nph_markdown(nph_part[2], plots=False) + "\n")
     if ssr_part is not None:
         typer.echo(report.ssr_markdown(ssr_part[1], plots=False) + "\n")
     if bayes_part is not None:
-        typer.echo(report.bayes_markdown(bayes_part[1], bayes_part[2], plots=False))
+        typer.echo(report.bayes_markdown(bayes_part[1], bayes_part[2], plots=False) + "\n")
+    if graph_part is not None:
+        typer.echo(report.graph_markdown(graph_part[1], plots=False))
 
 
 # ------------------------------------------------------------------------------ graph
@@ -1718,6 +1785,38 @@ def _resolve_graph(cfg: config.Config, flags: dict[str, Any]) -> multiplicity.Gr
     w = _numbers(g["weights"], "weights")
     t = _matrix(g["transitions"], "transitions")
     return multiplicity.Graph(tuple(w), tuple(tuple(r) for r in t), names or ())
+
+
+def _graph_run(cfg: config.Config, flags: dict[str, Any], seed: int | None = None):
+    """The graph, its test of observed p-values and its simulated power (either may be None).
+
+    ``seed`` overrides the [simulation] seed, so a report uses one seed throughout.
+    """
+    graph = _resolve_graph(cfg, flags)
+    alpha = _graph_alpha(cfg, flags)
+    gt = config.merge(cfg, "graph", flags)
+    if gt.get("p") is None and gt.get("means") is None:
+        raise ValueError("give observed --p to test, --means for power, or both")
+    test = None
+    if gt.get("p") is not None:
+        test = multiplicity.graph_test(_numbers(gt["p"], "p"), graph, alpha)
+    power = None
+    n_sim = seed_used = None
+    if gt.get("means") is not None:
+        corr_raw = gt.get("correlation", 0.0)
+        if isinstance(corr_raw, str) and ";" not in corr_raw:
+            corr: Any = _number(corr_raw, "correlation")
+        elif isinstance(corr_raw, str | list | tuple):
+            corr = _matrix(corr_raw, "correlation")
+        else:
+            corr = _number(corr_raw, "correlation")
+        n_sim, seed_used = _simulation_settings(cfg, flags, 100_000)
+        if seed is not None:
+            seed_used = seed
+        power = multiplicity.graph_power(
+            graph, _numbers(gt["means"], "means"), corr, alpha, n_sim, seed_used
+        )
+    return graph, alpha, test, power, n_sim, seed_used
 
 
 def _graph_alpha(cfg: config.Config, flags: dict[str, Any]) -> float:
@@ -1785,28 +1884,7 @@ def graph_cmd(
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
     try:
         cfg = config.load_config(config_file)
-        graph = _resolve_graph(cfg, flags)
-        alpha = _graph_alpha(cfg, flags)
-        gt = config.merge(cfg, "graph", flags)
-        if gt.get("p") is None and gt.get("means") is None:
-            raise ValueError("give observed --p to test, --means for power, or both")
-        test = None
-        if gt.get("p") is not None:
-            test = multiplicity.graph_test(_numbers(gt["p"], "p"), graph, alpha)
-        power = None
-        n_sim = seed_used = None
-        if gt.get("means") is not None:
-            corr_raw = gt.get("correlation", 0.0)
-            if isinstance(corr_raw, str) and ";" not in corr_raw:
-                corr: Any = _number(corr_raw, "correlation")
-            elif isinstance(corr_raw, str | list | tuple):
-                corr = _matrix(corr_raw, "correlation")
-            else:
-                corr = _number(corr_raw, "correlation")
-            n_sim, seed_used = _simulation_settings(cfg, flags, 100_000)
-            power = multiplicity.graph_power(
-                graph, _numbers(gt["means"], "means"), corr, alpha, n_sim, seed_used
-            )
+        graph, alpha, test, power, n_sim, seed_used = _graph_run(cfg, flags)
     except ValueError as exc:
         raise _fail(exc, as_json) from exc
     out = report.graph_summary(graph, alpha, test, power, seed_used)

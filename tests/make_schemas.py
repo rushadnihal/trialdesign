@@ -78,6 +78,8 @@ _CASES = [
     ("report", "group_sequential", "--config EX/phase3_survival.toml --nsim 2000 --seed 1"),
     ("report", "bayes", "--config EX/phase2_binary_bayes.toml --nsim 2000 --seed 1"),
     ("report", "ssr", "--config EX/phase3_ssr.toml --nsim 2000 --seed 1"),
+    ("report", "nph", "--config EX/phase3_survival_nph.toml --nsim 2000 --seed 1"),
+    ("report", "graph", "--config EX/two_doses_graph.toml --nsim 2000 --seed 1"),
     ("graph", "example", "--config EX/two_doses_graph.toml --nsim 2000 --seed 1"),
     ("graph", "test_only", "--preset holm:3 --p 0.01,0.02,0.2"),
 ]
