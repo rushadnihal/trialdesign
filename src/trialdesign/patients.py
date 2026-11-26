@@ -71,6 +71,7 @@ from scipy import stats
 
 from trialdesign.accrual import SurvivalStudy
 from trialdesign.boundaries import GroupSequentialDesign
+from trialdesign.hazards import EventModel
 from trialdesign.simulate import (
     DesignSimulation,
     OperatingCharacteristics,
@@ -94,6 +95,7 @@ __all__ = [
     "simulate_normal",
     "simulate_survival",
     "simulate_survival_ssr",
+    "weighted_logrank_z",
 ]
 
 NormalTest = Literal["t", "z"]
@@ -232,6 +234,55 @@ def logrank_score(
     return num, var
 
 
+def weighted_logrank_z(
+    time: NDArray[np.float64],
+    event: NDArray[np.bool_],
+    treat: NDArray,
+    rho: float = 0.0,
+    gamma: float = 1.0,
+) -> NDArray[np.float64]:
+    r"""Fleming-Harrington FH(:math:`\rho`, :math:`\gamma`) weighted log-rank z for each row.
+
+    Same inputs and sign as :func:`logrank_z` (positive when treatment does better). Each
+    event time :math:`t_j` gets the weight :math:`w_j = \hat S(t_j^-)^\rho\,
+    (1 - \hat S(t_j^-))^\gamma`, where :math:`\hat S` is the Kaplan-Meier estimate of the
+    pooled sample just before :math:`t_j`:
+
+    .. math:: Z = \frac{\sum_j w_j \bigl(n_{Tj}/n_j - e_{Tj}\bigr)}
+              {\sqrt{\sum_j w_j^2 \frac{n_{Tj} n_{Cj}}{n_j^2}}}.
+
+    FH(0, 0) is the log-rank test; FH(0, 1) puts its weight on late differences and is the
+    usual choice for a delayed treatment effect; FH(1, 0) is the Peto-Peto
+    (Gehan-Wilcoxon-type) test. With continuous times every :math:`d_j = 1`, so the tie
+    correction is 1, as in :func:`logrank_z`.
+
+    References
+    ----------
+    Harrington, D. P. and Fleming, T. R. (1982). A class of rank test procedures for censored
+    survival data. *Biometrika* 69, 553-566. Fleming, T. R. and Harrington, D. P. (1991).
+    *Counting Processes and Survival Analysis*. Wiley. Chapter 7.
+    """
+    if not (rho >= 0 and gamma >= 0):
+        raise ValueError("rho and gamma must be zero or positive")
+    m, n = time.shape
+    order = _order(time, event)
+    rows = np.arange(m)[:, None]
+    ev = event[rows, order]
+    tr = treat[rows, order].astype(np.float64)
+    n_risk = np.arange(n, 0, -1, dtype=np.float64)[None, :]
+    n_t = np.cumsum(tr[:, ::-1], axis=1)[:, ::-1]
+    p_t = n_t / n_risk
+    # pooled Kaplan-Meier just before each sorted position: product of (1 - d/n) over the
+    # earlier events
+    factor = np.where(ev, 1.0 - 1.0 / n_risk, 1.0)
+    km_after = np.cumprod(factor, axis=1)
+    km_before = np.concatenate([np.ones((m, 1)), km_after[:, :-1]], axis=1)
+    w = km_before**rho * (1.0 - km_before) ** gamma
+    num = np.where(ev, w * (p_t - tr), 0.0).sum(axis=1)
+    var = np.where(ev, w * w * p_t * (1.0 - p_t), 0.0).sum(axis=1)
+    return np.divide(num, np.sqrt(var), out=np.zeros(m), where=var > 0)
+
+
 def _order(time: NDArray, event: NDArray) -> NDArray:
     # events sort before censorings at the same time: nudge censored times up by a hair
     key = np.where(event, time, np.nextafter(time, np.inf))
@@ -270,6 +321,12 @@ class SurvivalSimulation:
         taken when the last patient's follow-up ends. Should be 0 for a sensible design.
     seed : int
         Entropy of the seed sequence, so the run can be repeated.
+    model : EventModel or None
+        The event-time model simulated, if not the study's exponential one. ``hazard_ratio``
+        is then the model's constant hazard ratio, or NaN when the hazards are not
+        proportional.
+    test : str
+        ``"logrank"``, or ``"fh(rho,gamma)"`` for the weighted log-rank test.
     """
 
     oc: OperatingCharacteristics
@@ -286,6 +343,8 @@ class SurvivalSimulation:
     expected_events_se: float
     events_not_reached: float
     seed: int
+    model: EventModel | None = None
+    test: str = "logrank"
 
     @property
     def reject_prob(self) -> float:
@@ -334,6 +393,8 @@ def simulate_survival(
     events: int | None = None,
     entry: Entry = "fixed",
     block_multiplier: int = 2,
+    model: EventModel | None = None,
+    fh: tuple[float, float] | None = None,
     n_sim: int = 10_000,
     seed: int | None = None,
 ) -> SurvivalSimulation:
@@ -364,6 +425,18 @@ def simulate_survival(
     block_multiplier : int
         Permuted blocks hold ``block_multiplier`` times the smallest integer allocation ratio
         (4 patients for 1:1 with the default 2).
+    model : EventModel, optional
+        Event-time distributions of the two arms (:mod:`trialdesign.hazards`): a delayed or
+        waning effect, any piecewise-constant hazards, or Weibull. Replaces the study's
+        exponential model and ``hazard_ratio`` (give one or the other); use
+        ``model.null()`` for the type I error. Accrual, dropout and allocation still come from
+        ``study``, so the design is sized under proportional hazards and simulated under the
+        model.
+    fh : (rho, gamma), optional
+        Test with the Fleming-Harrington weighted log-rank FH(rho, gamma)
+        (:func:`weighted_logrank_z`) instead of the log-rank test. Only for a single final
+        analysis: the group-sequential correlation of the weighted statistic is not
+        :math:`\sqrt{t_j/t_k}`, so the usual boundaries would not hold alpha.
     n_sim : int
         Number of simulated trials.
     seed : int, optional
@@ -376,14 +449,29 @@ def simulate_survival(
     References
     ----------
     Jennison & Turnbull (2000), section 13.1; Tsiatis (1981); Wassmer & Brannath (2016),
-    section 4.4.
+    section 4.4; Fleming & Harrington (1991), chapter 7.
     """
     t = check_info_rates(info_rates)
     c, b = _check_bounds(t, efficacy, futility)
     _check_n_sim(n_sim)
-    hr = study.hazard_ratio if hazard_ratio is None else float(hazard_ratio)
-    if not hr > 0:
-        raise ValueError("hazard_ratio must be positive")
+    if model is not None and hazard_ratio is not None:
+        raise ValueError("give a hazard_ratio or an event model, not both")
+    if model is not None:
+        model_hr = model.hazard_ratio
+        hr = math.nan if model_hr is None else model_hr
+    else:
+        hr = study.hazard_ratio if hazard_ratio is None else float(hazard_ratio)
+        if not hr > 0:
+            raise ValueError("hazard_ratio must be positive")
+    rho = gamma = 0.0
+    if fh is not None:
+        if t.size != 1:
+            raise ValueError(
+                "the weighted log-rank (FH) test is for a single final analysis; use one look"
+            )
+        rho, gamma = (float(x) for x in fh)
+        if not (rho >= 0 and gamma >= 0):
+            raise ValueError("FH rho and gamma must be zero or positive")
     n = math.ceil(study.n_total - 1e-9) if n_total is None else int(n_total)
     d_max = math.ceil(study.events - 1e-9) if events is None else int(events)
     d_k = np.rint(t * d_max).astype(np.int64)
@@ -422,8 +510,16 @@ def simulate_survival(
             else entry_times(n, study.accrual_times, study.accrual_rates, "random", m, rng)
         )
         arm = _arms(n, block, m, rng)
-        lam = np.where(arm == 1, lam_t, lam_c)
-        t_event = rng.exponential(1.0, (m, n)) / lam
+        if model is None:
+            lam = np.where(arm == 1, lam_t, lam_c)
+            t_event = rng.exponential(1.0, (m, n)) / lam
+        else:
+            e = rng.exponential(1.0, (m, n))
+            t_event = np.where(
+                arm == 1,
+                model.treatment.inverse_cumulative_hazard(e),
+                model.control.inverse_cumulative_hazard(e),
+            )
         t_drop = rng.exponential(1.0, (m, n)) / eta if eta > 0 else np.full((m, n), np.inf)
         has_event = t_event <= t_drop
         t_obs = np.minimum(t_event, t_drop)  # time from entry to event or dropout
@@ -442,7 +538,11 @@ def simulate_survival(
             follow = cut - u
             time_k = np.where(in_trial, np.minimum(t_obs, follow), -1.0)
             event_k = in_trial & has_event & (t_event <= follow)
-            z[:, k] = logrank_z(time_k, event_k, arm)
+            z[:, k] = (
+                logrank_z(time_k, event_k, arm)
+                if fh is None
+                else weighted_logrank_z(time_k, event_k, arm, rho, gamma)
+            )
         tally.add(z)
         # stop look per trial, as in _Tally
         stop = (z >= c) | (z < b)
@@ -486,6 +586,8 @@ def simulate_survival(
         expected_events_se=float(ev_se),
         events_not_reached=not_reached / n_sim,
         seed=int(ss.entropy),
+        model=model,
+        test="logrank" if fh is None else f"fh({rho:g},{gamma:g})",
     )
 
 
@@ -733,6 +835,8 @@ def simulate_design_patients(
     study: SurvivalStudy | None = None,
     n_total: int | None = None,
     events: int | None = None,
+    model: EventModel | None = None,
+    fh: tuple[float, float] | None = None,
     n_sim: int = 10_000,
     seed: int | None = None,
 ) -> DesignSimulation:
@@ -764,6 +868,11 @@ def simulate_design_patients(
         Accrual and event model (survival); its hazard ratio is the H1 value.
     n_total, events : int, optional
         Patients and final events (survival); default to the study's, rounded up.
+    model : EventModel, optional
+        Survival: the event-time model under H1 (:func:`simulate_survival`); H0 uses
+        ``model.null()``, both arms with the control distribution.
+    fh : (rho, gamma), optional
+        Survival: test with the weighted log-rank FH(rho, gamma); one look only.
     n_sim : int
         Simulated trials per scenario.
     seed : int, optional
@@ -824,7 +933,9 @@ def simulate_design_patients(
                 t,
                 c,
                 futility,
-                hazard_ratio=None if h1 else 1.0,
+                hazard_ratio=None if (h1 or model is not None) else 1.0,
+                model=None if model is None else (model if h1 else model.null()),
+                fh=fh,
                 n_total=n_total,
                 events=events,
                 n_sim=n_sim,
