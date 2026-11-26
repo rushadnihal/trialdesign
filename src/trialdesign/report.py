@@ -32,7 +32,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
 
-from trialdesign import accrual, bayes, equivalence, fixed, inference, ssr
+from trialdesign import accrual, bayes, equivalence, fixed, inference, multiplicity, ssr
 from trialdesign.boundaries import (
     GroupSequentialDesign,
     crossing_probabilities,
@@ -883,6 +883,48 @@ def ssr_tables(s: Summary, markdown: bool = False) -> list[str]:
                 markdown,
             )
         )
+    return out
+
+
+def graph_summary(
+    graph: multiplicity.Graph,
+    alpha_one_sided: float,
+    test: multiplicity.GraphTest | None = None,
+    power: multiplicity.GraphPower | None = None,
+    seed: int | None = None,
+) -> Summary:
+    """The graph, and optionally its test of observed p-values and its simulated power."""
+    out: Summary = {
+        "procedure": "graphical weighted Bonferroni (Bretz et al. 2009)",
+        "alpha_one_sided": alpha_one_sided,
+        "hypotheses": [
+            {"name": n, "weight": w, "transitions": list(t)}
+            for n, w, t in zip(graph.names, graph.weights, graph.transitions, strict=True)
+        ],
+        "test": None,
+        "power": None,
+    }
+    if test is not None:
+        out["test"] = {
+            "p_values": _floats(test.p_values),
+            "adjusted_p": _floats(test.adjusted_p),
+            "rejected": [bool(x) for x in test.rejected],
+            "steps": test.steps,
+        }
+    if power is not None:
+        out["power"] = {
+            "nsim": power.n_sim,
+            "seed": seed,
+            "means": _floats(power.means),
+            "correlation": [_floats(r) for r in power.correlation],
+            "local_power": _floats(power.local_power),
+            "local_power_se": _floats(power.local_power_se),
+            "any_power": power.any_power,
+            "any_power_se": power.any_power_se,
+            "all_power": power.all_power,
+            "all_power_se": power.all_power_se,
+            "expected_rejections": power.expected_rejections,
+        }
     return out
 
 

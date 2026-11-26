@@ -15,6 +15,8 @@ package for:
 - survival accrual, follow-up and dropout: patients, study duration and the calendar time of
   each look,
 - a Bayesian beta-binomial go/no-go interim with predictive probability of success and assurance,
+- graphical multiple testing (Bretz et al. 2009) for several hypotheses sharing one alpha, such
+  as two doses with primary and secondary endpoints: rejections, adjusted p-values and power,
 - inference at the end of a group-sequential trial: repeated confidence intervals and p-values,
   and the stage-wise p-value, median-unbiased estimate and confidence interval,
 - exact and Monte Carlo operating characteristics, including a patient-level survival
@@ -280,6 +282,7 @@ patient-level check is the better guide.
 | `trialdesign simulate` | Monte Carlo operating characteristics under H0 and H1, next to the exact values; `--engine patient` simulates patients and the real test, and for survival `--delay`, `--waning`, `--hazard-times` or `--kappa` simulate another event-time model and `--test fh:0,1` the weighted log-rank test |
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
 | `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z |
+| `trialdesign graph` | Graphical multiple test: rejections, adjusted p-values and the path for observed p-values (`--p`), and power for given z-means and correlation (`--means`) |
 | `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics; `--engine patient` adds a patient-level check, `--analyse` an inference section |
 
 Each command takes flags, a TOML design file (`--config`), or both; flags override the file.
@@ -341,6 +344,41 @@ not hold alpha. A `[hazards]` table in a design file takes the same settings
 (`delay`, `waning`, `hr_after`, `hazard_times`, `hazards_control`, `hazards_treatment`,
 `kappa`), and `test` goes under `[simulation]`.
 
+### Graphical multiple testing
+
+A confirmatory trial with two doses, each with a primary and a key secondary endpoint, tests
+four hypotheses and must hold the family-wise error rate at one-sided 0.025. A graph says how:
+each hypothesis starts with a weight (its share of alpha), and when one is rejected its level
+passes along the edges (Bretz et al. 2009). `trialdesign graph` tests observed p-values through
+the graph and simulates its power:
+
+```bash
+trialdesign graph --config examples/two_doses_graph.toml
+```
+
+```text
+Test
+Hypothesis         p-value     Adjusted p  Rejected
+H1 primary high    0.004       0.008       yes
+H2 primary low     0.015       0.02        yes
+H3 secondary high  0.011       0.022       yes
+H4 secondary low   0.2         0.2         no
+
+Path
+1. reject H1 primary high (p 0.004 <= 0.0125); weights now H2 primary low 0.75, H3 secondary high 0.25
+2. reject H2 primary low (p 0.015 <= 0.01875); weights now H3 secondary high 0.5, H4 secondary low 0.5
+3. reject H3 secondary high (p 0.011 <= 0.0125); weights now H4 secondary low 1
+```
+
+Power comes from simulating the one-sided z-statistics as multivariate normal with the given
+means (2.8 is 80% power for one test on its own at 0.025) and correlation (0.5 between two
+doses that share a control arm). For the example, 200,000 trials give power 0.742, 0.654, 0.435
+and 0.366 for H1 to H4, 0.814 to reject at least one and 0.293 to reject all four. Presets cover
+the usual procedures: `--preset holm:3`, `bonferroni:3`, `fixed-sequence:3`,
+`fallback:0.5,0.3,0.2` and `two-doses`. The graph is a Bonferroni-based shortcut of a closed
+test, so it controls the family-wise error rate for any correlation; it is for fixed designs
+(one analysis).
+
 ## Python API
 
 ```python
@@ -378,6 +416,14 @@ study.look_times(d.info_rates, delayed)  # expected calendar time of each look u
 nph = patients.simulate_survival(study, d.info_rates, d.efficacy, model=delayed, seed=1)
 h0 = patients.simulate_survival(study, d.info_rates, d.efficacy, model=delayed.null(), seed=1)
 fh = patients.simulate_survival(study, [1.0], [1.96], model=delayed, fh=(0, 1), seed=1)
+
+from trialdesign import multiplicity
+
+g = multiplicity.Graph.two_doses()  # or Graph(weights, transitions, names), Graph.holm(3), ...
+t = multiplicity.graph_test([0.004, 0.015, 0.011, 0.2], g, alpha_one_sided=0.025)
+t.rejected, t.adjusted_p, t.steps
+pw = multiplicity.graph_power(g, means=[2.8, 2.5, 2.2, 2.0], correlation=0.5, seed=1)
+pw.local_power, pw.any_power, pw.all_power
 
 b = bayes.bayesian_interim_design(n_interim=30, n_final=60)  # control patients per analysis
 b.ppos(6, 12), b.decide(6, 12)  # PPoS and go / no-go / continue at the interim
@@ -436,6 +482,8 @@ Reference values were produced once in R and saved to JSON, so CI stays Python-o
 | Survival event re-estimation, patient level: power, type I error, interim stops, expected events, duration and patients | `rpact::getSimulationSurvival` with `conditionalPower` (100,000 runs) | 4 | 3 MC SE |
 | Expected events under piecewise-exponential (delayed, waning, crossing; with dropout and piecewise accrual) and Weibull event times | `rpact::getEventProbabilities` | 6 | 1e-6 (share of patients) |
 | Patient-level simulation under non-proportional hazards and Weibull events: power, type I error, per-look stopping, look times, duration, expected patients and events | `rpact::getSimulationSurvival` with `piecewiseSurvivalTime` or `kappa` (100,000 runs) | 4 | 2 MC SE (power), 3 MC SE (per look, calendar) |
+| Graphical multiple testing: rejections and adjusted p-values (Bonferroni, Holm, fixed-sequence, fallback, two-dose and general graphs) | Closed test of weighted Bonferroni tests implemented in R; Holm also `stats::p.adjust` | 35 | exact / 1e-12 |
+| Power of a graph: per hypothesis, at least one, all, expected rejections (including the global-null FWER) | Exact integration with `mvtnorm::pmvnorm` | 5 | 2 MC SE (at least one), 3 MC SE (per hypothesis, all) |
 | Fleming-Harrington FH(rho, gamma) weighted log-rank statistic | Computed in R; FH(rho, 0) also `survival::survdiff(rho = ...)` | 15 | 1e-10 |
 
 Values: [`tests/reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/reference_values.json) (R 4.5.3, gsDesign 3.11.0,
@@ -448,7 +496,8 @@ rpact 5.0.0), [`tests/bayes_reference_values.json`](https://github.com/rushadnih
 [`tests/patients_endpoints_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/patients_endpoints_reference_values.json) and
 [`tests/ssr_survival_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/ssr_survival_reference_values.json) and
 [`tests/inference_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/inference_reference_values.json) and
-[`tests/nph_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/nph_reference_values.json) (rpact 3.4.0).
+[`tests/nph_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/nph_reference_values.json) (rpact 3.4.0) and
+[`tests/multiplicity_reference_values.json`](https://github.com/rushadnihal/trialdesign/blob/main/tests/multiplicity_reference_values.json) (mvtnorm 1.2.4).
 Scripts: [`tests/r/`](https://github.com/rushadnihal/trialdesign/tree/main/tests/r/). On top of these, property tests check that one look gives
 z = 1.96, that the per-look rejection probabilities under H0 sum to alpha, that PPoS is 0 or 1
 with no patients left and increases with treatment responders, and that every simulated rate
@@ -468,6 +517,7 @@ Rscript tests/r/patients_endpoints_reference_values.R > pe.json && mv pe.json te
 Rscript tests/r/ssr_survival_reference_values.R > ssr.json && mv ssr.json tests/ssr_survival_reference_values.json
 Rscript tests/r/inference_reference_values.R > inf.json && mv inf.json tests/inference_reference_values.json
 Rscript tests/r/nph_reference_values.R > nph.json && mv nph.json tests/nph_reference_values.json
+Rscript tests/r/multiplicity_reference_values.R > mult.json && mv mult.json tests/multiplicity_reference_values.json
 ```
 
 ## Development
@@ -490,7 +540,8 @@ The package is deliberately narrow: two arms and one primary endpoint. Not yet c
 - multi-arm, platform and basket trials;
 - group-sequential equivalence designs;
 - blinded sample size re-estimation, and enrichment designs;
-- multiplicity across several endpoints (graphical testing);
+- group-sequential graphical testing (Maurer and Bretz 2013), and Simes or parametric tests
+  inside a graph;
 - response-adaptive randomisation;
 - Stan or PyMC models and dynamic borrowing;
 - designing for non-proportional hazards analytically (average hazard ratio, RMST or max-combo

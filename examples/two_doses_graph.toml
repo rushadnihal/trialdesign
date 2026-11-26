@@ -1,0 +1,27 @@
+# Two doses against control, each with a primary and a key secondary endpoint: a graphical
+# multiple test (Bretz et al. 2009) that holds the family-wise error rate at one-sided 0.025.
+# Run:  trialdesign graph --config examples/two_doses_graph.toml
+#       trialdesign graph --config examples/two_doses_graph.toml --p 0.004,0.03,0.011,0.2   # H2 now fails
+
+[graph]
+names = ["H1 primary high", "H2 primary low", "H3 secondary high", "H4 secondary low"]
+weights = [0.5, 0.5, 0, 0]          # each primary starts with half of alpha
+transitions = [                     # row i: where H_i's level goes once H_i is rejected
+  [0, 0.5, 0.5, 0],                 # high-dose primary: half to its secondary, half to H2
+  [0.5, 0, 0, 0.5],
+  [0, 1, 0, 0],                     # a rejected secondary passes everything on
+  [1, 0, 0, 0],
+]
+alpha_one_sided = 0.025
+p = [0.004, 0.015, 0.011, 0.2]       # observed one-sided p-values
+means = [2.8, 2.5, 2.2, 2.0]        # power: mean of each one-sided z (2.8 = 80% on its own)
+correlation = [                     # doses share a control: 0.5 between comparisons
+  [1, 0.5, 0.5, 0.25],
+  [0.5, 1, 0.25, 0.5],
+  [0.5, 0.25, 1, 0.5],
+  [0.25, 0.5, 0.5, 1],
+]
+
+[simulation]
+nsim = 200000
+seed = 2026

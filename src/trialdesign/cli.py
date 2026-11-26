@@ -19,7 +19,17 @@ from typing import Annotated, Any, cast
 import numpy as np
 import typer
 
-from trialdesign import __version__, accrual, bayes, config, fixed, inference, report, ssr
+from trialdesign import (
+    __version__,
+    accrual,
+    bayes,
+    config,
+    fixed,
+    inference,
+    multiplicity,
+    report,
+    ssr,
+)
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
 from trialdesign.hazards import EventModel
 from trialdesign.patients import simulate_design_patients, simulate_survival_ssr
@@ -1404,3 +1414,203 @@ def report_cmd(
         typer.echo(report.ssr_markdown(ssr_part[1], plots=False) + "\n")
     if bayes_part is not None:
         typer.echo(report.bayes_markdown(bayes_part[1], bayes_part[2], plots=False))
+
+
+# ------------------------------------------------------------------------------ graph
+
+_PRESETS = ("bonferroni", "holm", "fixed-sequence", "fallback", "two-doses")
+
+
+def _matrix(value: Any, name: str) -> list[list[float]]:
+    if isinstance(value, str):
+        rows = [r for r in value.replace(" ", "").split(";") if r]
+        return [_numbers(r, name) for r in rows]
+    if isinstance(value, list | tuple) and all(isinstance(r, list | tuple) for r in value):
+        return [_numbers(list(r), name) for r in value]
+    raise ValueError(f'{name} must be rows separated by ";" ("0,1;1,0") or a list of lists')
+
+
+def _resolve_graph(cfg: config.Config, flags: dict[str, Any]) -> multiplicity.Graph:
+    g = {k: v for k, v in config.merge(cfg, "graph", flags).items() if v is not None}
+    names = None
+    if g.get("names") is not None:
+        raw = g["names"]
+        names = tuple(raw.split(",") if isinstance(raw, str) else (str(x) for x in raw))
+        names = tuple(n.strip() for n in names)
+    preset = g.get("preset")
+    if preset is not None:
+        if "weights" in g or "transitions" in g:
+            raise ValueError("give a --preset or --weights and --transitions, not both")
+        text = str(preset)
+        kind, _, arg = text.partition(":")
+        if kind not in _PRESETS:
+            raise ValueError(f"preset must be one of {', '.join(_PRESETS)}, got {text!r}")
+        if kind == "two-doses":
+            graph = multiplicity.Graph.two_doses(_number(arg, "preset") if arg else 0.5)
+        elif kind == "fallback":
+            if not arg:
+                raise ValueError('fallback needs its weights, e.g. "fallback:0.5,0.3,0.2"')
+            graph = multiplicity.Graph.fallback(_numbers(arg, "preset"))
+        else:
+            if not arg:
+                raise ValueError(f'{kind} needs the number of hypotheses, e.g. "{kind}:3"')
+            m = _whole(arg, "preset")
+            graph = {
+                "bonferroni": multiplicity.Graph.bonferroni,
+                "holm": multiplicity.Graph.holm,
+                "fixed-sequence": multiplicity.Graph.fixed_sequence,
+            }[kind](m)
+        if names is not None:
+            graph = multiplicity.Graph(graph.weights, graph.transitions, names)
+        return graph
+    if "weights" not in g or "transitions" not in g:
+        raise ValueError("give --weights and --transitions, or a --preset")
+    w = _numbers(g["weights"], "weights")
+    t = _matrix(g["transitions"], "transitions")
+    return multiplicity.Graph(tuple(w), tuple(tuple(r) for r in t), names or ())
+
+
+def _graph_alpha(cfg: config.Config, flags: dict[str, Any]) -> float:
+    a = config.merge(cfg, "graph", flags).get("alpha_one_sided")
+    return 0.025 if a is None else _number(a, "alpha_one_sided")
+
+
+@app.command(name="graph")
+def graph_cmd(
+    config_file: ConfigOpt = None,
+    preset: Annotated[
+        str | None,
+        typer.Option(
+            help='A ready-made graph: "holm:<m>", "bonferroni:<m>", "fixed-sequence:<m>", '
+            '"fallback:<w1>,...,<wm>" or "two-doses" (two primaries passing to their '
+            'secondaries; "two-doses:<split>" sets the share each primary passes on).'
+        ),
+    ] = None,
+    weights: Annotated[
+        str | None,
+        typer.Option(help='Initial weight of each hypothesis, summing to at most 1 ("0.5,0.5").'),
+    ] = None,
+    transitions: Annotated[
+        str | None,
+        typer.Option(
+            help='Transition matrix, rows separated by ";" ("0,1;1,0"): where a rejected '
+            "hypothesis passes its level."
+        ),
+    ] = None,
+    names: Annotated[
+        str | None, typer.Option(help='Hypothesis names ("dose high,dose low").')
+    ] = None,
+    alpha_one_sided: AlphaOneOpt = None,
+    p: Annotated[
+        str | None,
+        typer.Option("--p", help='Observed one-sided p-values, one per hypothesis ("0.01,0.04").'),
+    ] = None,
+    means: Annotated[
+        str | None,
+        typer.Option(
+            help="Power: mean of each one-sided z-statistic, e.g. 2.8 for 80% power on its "
+            "own at 0.025 (0 for a true null)."
+        ),
+    ] = None,
+    correlation: Annotated[
+        str | None,
+        typer.Option(
+            help='Power: one correlation for every pair ("0.5") or the matrix, rows '
+            'separated by ";" [default: 0].'
+        ),
+    ] = None,
+    nsim: Annotated[
+        int | None, typer.Option(help="Power: simulated trials [default: 100000].")
+    ] = None,
+    seed: SeedOpt = None,
+    as_json: JsonOpt = False,
+) -> None:
+    """Graphical multiple testing (Bretz et al. 2009): several hypotheses sharing one alpha.
+
+    With --p, tests the observed p-values through the graph and prints the rejections, the
+    adjusted p-values and the path. With --means, simulates the power of the graph: the
+    chance of rejecting each hypothesis, at least one, and all. Give a --preset, or
+    --weights and --transitions; a [graph] table in a design file takes the same keys.
+    """
+    flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
+    try:
+        cfg = config.load_config(config_file)
+        graph = _resolve_graph(cfg, flags)
+        alpha = _graph_alpha(cfg, flags)
+        gt = config.merge(cfg, "graph", flags)
+        if gt.get("p") is None and gt.get("means") is None:
+            raise ValueError("give observed --p to test, --means for power, or both")
+        test = None
+        if gt.get("p") is not None:
+            test = multiplicity.graph_test(_numbers(gt["p"], "p"), graph, alpha)
+        power = None
+        n_sim = seed_used = None
+        if gt.get("means") is not None:
+            corr_raw = gt.get("correlation", 0.0)
+            if isinstance(corr_raw, str) and ";" not in corr_raw:
+                corr: Any = _number(corr_raw, "correlation")
+            elif isinstance(corr_raw, str | list | tuple):
+                corr = _matrix(corr_raw, "correlation")
+            else:
+                corr = _number(corr_raw, "correlation")
+            n_sim, seed_used = _simulation_settings(cfg, flags, 100_000)
+            power = multiplicity.graph_power(
+                graph, _numbers(gt["means"], "means"), corr, alpha, n_sim, seed_used
+            )
+    except ValueError as exc:
+        raise _fail(exc) from exc
+    out = report.graph_summary(graph, alpha, test, power, seed_used)
+    if as_json:
+        _print_json(out)
+        return
+    head = f"trialdesign {__version__} | graphical multiple test | alpha_one_sided {alpha:g}"
+    if power is not None:
+        head += f" | seed {seed_used} | {n_sim:,} simulated trials"
+    typer.echo(head)
+    _print_graph(out)
+
+
+def _print_graph(out: dict[str, Any]) -> None:
+    hyp = out["hypotheses"]
+    width = max(len("Hypothesis"), *(len(h["name"]) for h in hyp))
+    typer.echo("\nGraph (weight, then the share of its level each hypothesis passes on)")
+    targets = "  ".join(f"{'-> ' + h['name']:>{max(8, len(h['name']) + 3)}}" for h in hyp)
+    typer.echo(f"{'Hypothesis':<{width}}  Weight  {targets}")
+    for h in hyp:
+        cells = "  ".join(
+            f"{x:>{max(8, len(t['name']) + 3)}.4g}"
+            for x, t in zip(h["transitions"], hyp, strict=True)
+        )
+        typer.echo(f"{h['name']:<{width}}  {h['weight']:.4f}  {cells}")
+    if out.get("test") is not None:
+        t = out["test"]
+        typer.echo("\nTest")
+        typer.echo(f"{'Hypothesis':<{width}}  p-value     Adjusted p  Rejected")
+        for h, pv, ap, rj in zip(hyp, t["p_values"], t["adjusted_p"], t["rejected"], strict=True):
+            typer.echo(f"{h['name']:<{width}}  {pv:<10.4g}  {ap:<10.4g}  {'yes' if rj else 'no'}")
+        if t["steps"]:
+            typer.echo("\nPath")
+            for i, s in enumerate(t["steps"], 1):
+                rest = ", ".join(
+                    f"{h['name']} {w:.4g}"
+                    for h, w in zip(hyp, s["weights_after"], strict=True)
+                    if w > 0
+                )
+                typer.echo(
+                    f"{i}. reject {s['rejected']} (p {s['p_value']:.4g} <= {s['level']:.4g})"
+                    + (f"; weights now {rest}" if rest else "")
+                )
+        else:
+            typer.echo("\nNothing is rejected.")
+    if out.get("power") is not None:
+        pw = out["power"]
+        typer.echo("\nPower")
+        typer.echo(f"{'Hypothesis':<{width}}  Mean z  Power   MC SE")
+        rows = zip(hyp, pw["means"], pw["local_power"], pw["local_power_se"], strict=True)
+        for h, mu, lp, se in rows:
+            typer.echo(f"{h['name']:<{width}}  {mu:6.3f}  {lp:.4f}  {se:.4f}")
+        typer.echo(
+            f"\nReject at least one: {pw['any_power']:.4f} (MC SE {pw['any_power_se']:.4f}); "
+            f"all: {pw['all_power']:.4f} (MC SE {pw['all_power_se']:.4f}); "
+            f"expected rejections {pw['expected_rejections']:.3f}"
+        )
