@@ -34,6 +34,21 @@ All notable changes to this project. Versions follow [Semantic Versioning](https
   `stats::p.adjust`, and exact power from `mvtnorm::pmvnorm`.
 - `trialdesign graph` command and a `[graph]` table in design files;
   `examples/two_doses_graph.toml`.
+- **Blinded sample size re-estimation** (`trialdesign.blinded`, Kieser and Friede 2003):
+  `BlindedSSR` re-estimates the SD of a normal endpoint from the one-sample variance of an
+  internal pilot (optionally bias-adjusted), recomputes the sample size between the planned
+  size (or the pilot) and a cap, and simulates type I error, power and the sample size
+  distribution of the final t-test. `trialdesign ssr --blinded --pilot-n` with
+  `--pilot-sd`, `--sd-adjusted` and `--floor` (or `blinded`, `pilot_n`, ... under
+  `[adaptation]`); `examples/phase3_blinded_ssr.toml`. Validated against a patient-level
+  simulation in R.
+- **Group-sequential equivalence** (`equivalence.group_sequential_equivalence_normal` and
+  `_binary`): two one-sided group-sequential tests, each spending alpha, with equivalence
+  declared at the first look where both reject. Sample size, per-look probabilities of
+  declaring equivalence at the design difference and at each margin, expected sample size,
+  and a patient-level `simulate` check. `trialdesign design --margin` now combines with
+  `--looks`. Validated against `rpact` critical values and `mvtnorm::pmvnorm`; one look
+  reproduces the fixed TOST.
 
 ## 0.3.0 (2026-11-26)
 
