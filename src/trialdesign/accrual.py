@@ -46,6 +46,9 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import optimize
 
+from trialdesign import hazards
+from trialdesign.hazards import EventModel
+
 __all__ = [
     "SurvivalStudy",
     "dropout_hazard",
@@ -174,8 +177,20 @@ class SurvivalStudy:
         """Share of randomised patients with an event by the final analysis."""
         return self.events / self.n_total
 
-    def events_at(self, t: float) -> float:
-        """Expected events by calendar time ``t``."""
+    def event_model(self) -> EventModel:
+        """The study's exponential, proportional-hazards event model."""
+        return EventModel.exponential(self.hazard_control, self.hazard_ratio)
+
+    def events_at(self, t: float, model: EventModel | None = None) -> float:
+        """Expected events by calendar time ``t``.
+
+        With ``model`` (see :mod:`trialdesign.hazards`), under that event-time model instead of
+        the study's exponential one, with the study's accrual, dropout and allocation.
+        """
+        if model is not None:
+            return hazards.expected_events(
+                t, self.accrual_times, self.accrual_rates, model, self.dropout, self.allocation
+            )
         return expected_events(
             t,
             self.accrual_times,
@@ -192,18 +207,44 @@ class SurvivalStudy:
         starts = np.concatenate([[0.0], ends[:-1]])
         return float(np.sum(self.accrual_rates * (np.minimum(ends, t) - np.minimum(starts, t))))
 
-    def time_of_events(self, events: float) -> float:
-        """Calendar time at which ``events`` events are expected (at most the study end)."""
-        if not 0 < events <= self.events * (1 + 1e-9):
-            raise ValueError("events must be positive and at most the final number of events")
-        end = self.study_duration
-        if events >= self.events:
-            return end
-        return float(optimize.brentq(lambda t: self.events_at(t) - events, 0.0, end, xtol=_XTOL))
+    def time_of_events(self, events: float, model: EventModel | None = None) -> float:
+        """Calendar time at which ``events`` events are expected.
 
-    def look_times(self, info_rates: Sequence[float]) -> NDArray[np.float64]:
-        """Calendar time of each analysis, at information fractions of the final events."""
-        return np.array([self.time_of_events(f * self.events) for f in info_rates])
+        Without ``model``, at most the study end (the planned final events). With ``model``,
+        the time may fall after the planned study end, when that model gives events more
+        slowly; a ``ValueError`` says so if the patients can never produce that many.
+        """
+        if model is None:
+            if not 0 < events <= self.events * (1 + 1e-9):
+                raise ValueError("events must be positive and at most the final number of events")
+            end = self.study_duration
+            if events >= self.events:
+                return end
+            return float(
+                optimize.brentq(lambda t: self.events_at(t) - events, 0.0, end, xtol=_XTOL)
+            )
+        if not events > 0:
+            raise ValueError("events must be positive")
+        hi = self.study_duration
+        for _ in range(60):
+            if self.events_at(hi, model) >= events:
+                break
+            hi *= 2
+        else:
+            raise ValueError(f"{events:g} events are not expected under this event model")
+        return float(
+            optimize.brentq(lambda t: self.events_at(t, model) - events, 0.0, hi, xtol=_XTOL)
+        )
+
+    def look_times(
+        self, info_rates: Sequence[float], model: EventModel | None = None
+    ) -> NDArray[np.float64]:
+        """Calendar time of each analysis, at information fractions of the final events.
+
+        With ``model``, the expected times under that event-time model for the same planned
+        event counts.
+        """
+        return np.array([self.time_of_events(f * self.events, model) for f in info_rates])
 
 
 def _segments(accrual_time: float | Sequence[float]) -> NDArray[np.float64]:

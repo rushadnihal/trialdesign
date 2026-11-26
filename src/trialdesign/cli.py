@@ -21,6 +21,7 @@ import typer
 
 from trialdesign import __version__, accrual, bayes, config, fixed, inference, report, ssr
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
+from trialdesign.hazards import EventModel
 from trialdesign.patients import simulate_design_patients, simulate_survival_ssr
 from trialdesign.simulate import DesignSimulation, simulate_design
 from trialdesign.spending import parse_spending
@@ -243,6 +244,56 @@ Z1Opt = Annotated[
     float | None,
     typer.Option(
         help="SSR: observed interim z-statistic; prints the zone and the new sample size."
+    ),
+]
+DelayOpt = Annotated[
+    float | None,
+    typer.Option(
+        help="Survival, patient engine: delayed effect, HR 1 for this many months after "
+        "entry, then --hr-after (default --hr)."
+    ),
+]
+WaningOpt = Annotated[
+    float | None,
+    typer.Option(
+        help="Survival, patient engine: waning effect, --hr-after (default --hr) until this "
+        "many months after entry, then HR 1."
+    ),
+]
+HrAfterOpt = Annotated[
+    float | None,
+    typer.Option(
+        help="Survival, patient engine: true hazard ratio while the effect is on (with "
+        "--delay or --waning), or the Weibull hazard ratio (with --kappa) [default: --hr]."
+    ),
+]
+HazardTimesOpt = Annotated[
+    str | None,
+    typer.Option(
+        help='Survival, patient engine: start of each hazard interval in months ("0,4"), '
+        "with --hazards-control and --hazards-treatment."
+    ),
+]
+HazardsControlOpt = Annotated[
+    str | None,
+    typer.Option(help='Survival, patient engine: control hazard per interval ("0.058,0.058").'),
+]
+HazardsTreatmentOpt = Annotated[
+    str | None,
+    typer.Option(help='Survival, patient engine: treatment hazard per interval ("0.058,0.04").'),
+]
+KappaOpt = Annotated[
+    float | None,
+    typer.Option(
+        help="Survival, patient engine: Weibull shape; the control median stays "
+        "--median-control and the hazard ratio is constant."
+    ),
+]
+TestOpt = Annotated[
+    str | None,
+    typer.Option(
+        help='Survival, patient engine: "logrank" (default) or the Fleming-Harrington '
+        'weighted log-rank "fh:<rho>,<gamma>" (e.g. "fh:0,1"); FH needs --looks 1.'
     ),
 ]
 XcOpt = Annotated[int | None, typer.Option(help="Bayes: observed control responders at interim.")]
@@ -481,8 +532,95 @@ def _engine(cfg: config.Config, flags: dict[str, Any]) -> str:
     return engine
 
 
+_HAZARD_KINDS = ("delay", "waning", "hazard_times", "kappa")
+
+
+def _event_model(cfg: config.Config, flags: dict[str, Any], inp: _DesignInputs):
+    """The survival event-time model from --delay, --waning, --hazard-times or --kappa."""
+    h = {k: v for k, v in config.merge(cfg, "hazards", flags).items() if v is not None}
+    if not h:
+        return None
+    if inp.endpoint != "survival":
+        raise ValueError("hazard settings apply only to the survival endpoint")
+    kinds = [k for k in _HAZARD_KINDS if k in h]
+    if len(kinds) > 1:
+        names = ", ".join("--" + k.replace("_", "-") for k in kinds)
+        raise ValueError(f"give one event model, not {names}")
+    if not kinds:
+        raise ValueError("--hr-after and hazards need --delay, --waning, --hazard-times or --kappa")
+    acc = inp.effect.get("accrual_inputs")
+    if acc is None:
+        raise ValueError("an event model needs an accrual model: give --median-control")
+    median = acc["median_control"]
+    lam_c = accrual.hazard_from_median(median)
+    kind = kinds[0]
+    if kind == "hazard_times":
+        if "hr_after" in h:
+            raise ValueError("--hr-after does not apply to --hazard-times; give the hazards")
+        if "hazards_control" not in h or "hazards_treatment" not in h:
+            raise ValueError("--hazard-times needs --hazards-control and --hazards-treatment")
+        times = _numbers(h["hazard_times"], "hazard_times")
+        ctrl = _numbers(h["hazards_control"], "hazards_control")
+        trt = _numbers(h["hazards_treatment"], "hazards_treatment")
+        if not len(times) == len(ctrl) == len(trt):
+            raise ValueError("give one control and one treatment hazard per hazard interval")
+        return EventModel.piecewise(times, ctrl, trt)
+    if "hazards_control" in h or "hazards_treatment" in h:
+        raise ValueError("--hazards-control and --hazards-treatment need --hazard-times")
+    hr = _number(h.get("hr_after", inp.effect["hr"]), "hr_after")
+    if kind == "delay":
+        return EventModel.delayed_effect(lam_c, hr, _number(h["delay"], "delay"))
+    if kind == "waning":
+        return EventModel.waning_effect(lam_c, hr, _number(h["waning"], "waning"))
+    return EventModel.weibull(median, hr, _number(h["kappa"], "kappa"))
+
+
+def _test(cfg: config.Config, flags: dict[str, Any], inp: _DesignInputs):
+    """None for the log-rank test, or (rho, gamma) for FH."""
+    raw = config.merge(cfg, "simulation", flags).get("test")
+    if raw is None or str(raw) == "logrank":
+        return None
+    text = str(raw)
+    if inp.endpoint != "survival":
+        raise ValueError("--test applies only to the survival endpoint")
+    if not text.startswith("fh:"):
+        raise ValueError(f'test must be "logrank" or "fh:<rho>,<gamma>", got {text!r}')
+    rg = _numbers(text[3:], "test")
+    if len(rg) != 2:
+        raise ValueError('the FH test needs two numbers, "fh:<rho>,<gamma>"')
+    return (rg[0], rg[1])
+
+
+def _describe_model(model: EventModel | None, fh: tuple[float, float] | None) -> str:
+    test = "the log-rank test" if fh is None else f"the FH({fh[0]:g},{fh[1]:g}) weighted log-rank"
+    if model is None:
+        return f"proportional hazards and {test}"
+    c, t = model.control, model.treatment
+    change = c.times[1] if len(c.times) > 1 else 0.0
+    if model.name == "delayed_effect":
+        hr = t.hazards[-1] / c.hazards[-1]
+        what = f"a delayed effect (HR 1 for {change:g} months, then {hr:.3g})"
+    elif model.name == "waning_effect":
+        hr = t.hazards[0] / c.hazards[0]
+        what = f"a waning effect (HR {hr:.3g} for {change:g} months, then 1)"
+    elif model.name == "weibull":
+        what = f"Weibull event times (shape {c.kappa:g}, HR {model.hazard_ratio:.3g})"
+    else:
+        what = (
+            f"piecewise hazards starting at {list(c.times)} (control {list(c.hazards)}, "
+            f"treatment {list(t.hazards)})"
+        )
+    return f"{what} and {test}"
+
+
 def _patient_simulation(
-    inp: _DesignInputs, gsd: GroupSequentialDesign, s: dict[str, Any], n_sim: int, seed: int
+    inp: _DesignInputs,
+    gsd: GroupSequentialDesign,
+    s: dict[str, Any],
+    n_sim: int,
+    seed: int,
+    model: EventModel | None = None,
+    fh: tuple[float, float] | None = None,
 ) -> DesignSimulation:
     """Patient-level H0 and H1 simulation of a group-sequential design built by the CLI."""
     size, eff = s["sample_size"], inp.effect
@@ -526,6 +664,8 @@ def _patient_simulation(
         study=study,
         n_total=size["max_n_total_ceil"],
         events=size["max_events_ceil"],
+        model=model,
+        fh=fh,
         n_sim=n_sim,
         seed=seed,
     )
@@ -949,6 +1089,14 @@ def simulate(
     ] = None,
     seed: SeedOpt = None,
     engine: EngineOpt = None,
+    delay: DelayOpt = None,
+    waning: WaningOpt = None,
+    hr_after: HrAfterOpt = None,
+    hazard_times: HazardTimesOpt = None,
+    hazards_control: HazardsControlOpt = None,
+    hazards_treatment: HazardsTreatmentOpt = None,
+    kappa: KappaOpt = None,
+    test: TestOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Monte Carlo operating characteristics of a group-sequential design under H0 and H1.
@@ -956,7 +1104,11 @@ def simulate(
     Type I error is simulated with futility ignored (non-binding) or followed (binding); power
     and expected sample size follow futility. Every estimate has a Monte Carlo SE and is shown
     next to its exact value. --engine patient simulates patients and the real test (t-test,
-    Farrington-Manning z-test or log-rank) instead of the canonical z-scale process.
+    Farrington-Manning z-test or log-rank) instead of the canonical z-scale process. For
+    survival, the patient engine can also simulate non-proportional hazards (--delay,
+    --waning, --hazard-times) or Weibull event times (--kappa): the design is still sized
+    under proportional hazards, and the simulation shows what the other model does to it.
+    --test fh:0,1 uses the weighted log-rank test (one look only).
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
     try:
@@ -966,12 +1118,18 @@ def simulate(
             raise ValueError("simulate needs a group-sequential design: give --looks")
         eng = _engine(cfg, flags)
         n_sim, seed_used = _simulation_settings(cfg, flags, 100_000 if eng == "score" else 10_000)
+        model, fh = _event_model(cfg, flags, inp), _test(cfg, flags, inp)
+        if (model is not None or fh is not None) and eng != "patient":
+            raise ValueError("an event model or the FH test needs --engine patient")
         gsd, s = _sequential(inp)
         if eng == "score":
             design_sim = simulate_design(gsd, n_sim, seed_used)
         else:
-            design_sim = _patient_simulation(inp, gsd, s, n_sim, seed_used)
+            design_sim = _patient_simulation(inp, gsd, s, n_sim, seed_used, model, fh)
         sim = {**report.simulation_summary(design_sim, _n_max(s)), "engine": eng}
+        if eng == "patient" and inp.endpoint == "survival":
+            sim["event_model"] = None if model is None else model.describe()
+            sim["test"] = "logrank" if fh is None else f"fh:{fh[0]:g},{fh[1]:g}"
     except ValueError as exc:
         raise _fail(exc) from exc
     if as_json:
@@ -981,6 +1139,8 @@ def simulate(
         f"trialdesign {__version__} | seed {seed_used} | {n_sim:,} simulated trials | "
         f"{eng} engine | alpha is one-sided"
     )
+    if "test" in sim:
+        typer.echo(f"Simulated with {_describe_model(model, fh)}; the design assumes PH.")
     _print_sequential(s, sim)
 
 
@@ -1177,6 +1337,11 @@ def report_cmd(
             gsd, s = _sequential(inp)
             sim = None
             patient_engine = _engine(cfg, flags) == "patient"
+            if cfg.get("hazards") or config.merge(cfg, "simulation", flags).get("test"):
+                raise ValueError(
+                    "the report does not cover event models or the FH test yet; "
+                    "use trialdesign simulate --engine patient"
+                )
             if patient_engine and n_sim is None:
                 raise ValueError("the patient engine needs --nsim (or nsim under [simulation])")
             if n_sim is not None:
