@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gsdtrial"
-version = "0.3.0"
+version = "0.4.0"
 description = "Group-sequential, adaptive and Bayesian design for two-arm clinical trials"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -31,6 +31,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
