@@ -45,6 +45,11 @@ A design file has up to eight tables. Every key has a command-line flag of the s
     max_factor = 2.0           # cap on total patients or events, as a multiple of the planned
                                # maximum (default 2; 1.5 for survival)
     extend = "followup"        # survival: find extra events by "followup" or "accrual"
+    # blinded = true           # or: blinded re-estimation of the SD (normal endpoint) from
+    # pilot_n = 60             # an internal pilot of this many patients, with
+    # pilot_sd = 1.2           # the observed one-sample SD of the pooled pilot data,
+    # sd_adjusted = false      # optionally bias-adjusted, and
+    # floor = "planned"        # the sample size never below "planned" (or "pilot")
 
     [bayes]           # Bayesian go/no-go interim for a binary endpoint
     pc = 0.30
@@ -117,7 +122,19 @@ SECTIONS: dict[str, frozenset[str]] = {
         }
     ),
     "adaptation": frozenset(
-        {"interim_fraction", "cp_min", "cp_target", "max_factor", "z1", "extend"}
+        {
+            "interim_fraction",
+            "cp_min",
+            "cp_target",
+            "max_factor",
+            "z1",
+            "extend",
+            "blinded",
+            "pilot_n",
+            "pilot_sd",
+            "sd_adjusted",
+            "floor",
+        }
     ),
     "bayes": frozenset(
         {

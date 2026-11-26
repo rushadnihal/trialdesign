@@ -30,6 +30,7 @@ from trialdesign import (
     report,
     ssr,
 )
+from trialdesign.blinded import BlindedSSR
 from trialdesign.boundaries import GroupSequentialDesign, group_sequential_design
 from trialdesign.hazards import EventModel
 from trialdesign.patients import simulate_design_patients, simulate_survival_ssr
@@ -141,9 +142,10 @@ MethodOpt = Annotated[
 MarginOpt = Annotated[
     str | None,
     typer.Option(
-        help='Equivalence (fixed normal/binary design): margin on T - C, symmetric ("0.5") or '
+        help='Equivalence (normal/binary): margin on T - C, symmetric ("0.5") or '
         '"lower,upper" ("-0.4,0.6"). Each one-sided test is at alpha_two_sided / 2; use '
-        "--alpha-two-sided 0.1 for the usual 90% interval."
+        "--alpha-two-sided 0.1 for the usual 90% interval. With --looks: two one-sided "
+        "group-sequential tests, each spending alpha with --efficacy."
     ),
 ]
 AnalyseOpt = Annotated[
@@ -254,6 +256,41 @@ Z1Opt = Annotated[
     float | None,
     typer.Option(
         help="SSR: observed interim z-statistic; prints the zone and the new sample size."
+    ),
+]
+BlindedOpt = Annotated[
+    bool | None,
+    typer.Option(
+        "--blinded/--unblinded",
+        help="SSR: blinded re-estimation of the SD from an internal pilot (Kieser-Friede; "
+        "normal endpoint) instead of the promising zone [default: unblinded].",
+        show_default=False,
+    ),
+]
+PilotNOpt = Annotated[
+    int | None, typer.Option(help="Blinded SSR: patients in the internal pilot (both arms).")
+]
+PilotSdOpt = Annotated[
+    float | None,
+    typer.Option(
+        help="Blinded SSR: observed one-sample SD of the pooled, blinded pilot data; prints "
+        "the re-estimated sample size."
+    ),
+]
+SdAdjustedOpt = Annotated[
+    bool | None,
+    typer.Option(
+        "--sd-adjusted/--sd-unadjusted",
+        help="Blinded SSR: subtract the bias of the one-sample variance at --delta "
+        "[default: unadjusted].",
+        show_default=False,
+    ),
+]
+FloorOpt = Annotated[
+    str | None,
+    typer.Option(
+        help='Blinded SSR: lower bound on the new sample size, "planned" (never decrease) or '
+        '"pilot" [default: planned].'
     ),
 ]
 DelayOpt = Annotated[
@@ -466,8 +503,6 @@ def _resolve_design(cfg: config.Config, flags: dict[str, Any]) -> _DesignInputs:
     looks = seq.get("looks")
     if looks is None and (seq.get("efficacy") is not None or seq.get("futility") is not None):
         raise ValueError("--looks is required for a group-sequential design")
-    if looks is not None and "margin" in effect:
-        raise ValueError("equivalence (--margin) is for fixed designs; leave out --looks")
     return _DesignInputs(
         endpoint=endpoint,
         effect=effect,
@@ -495,6 +530,11 @@ def _fixed(inp: _DesignInputs, alpha_two_sided: float) -> dict[str, Any]:
 
 def _sequential(inp: _DesignInputs) -> tuple[GroupSequentialDesign, dict[str, Any]]:
     assert inp.looks is not None
+    if "margin" in inp.effect:
+        raise ValueError(
+            "group-sequential equivalence (--margin with --looks) is available in "
+            "trialdesign design only"
+        )
     gsd = group_sequential_design(
         inp.looks,
         alpha_one_sided=inp.alpha_one_sided,
@@ -504,6 +544,70 @@ def _sequential(inp: _DesignInputs) -> tuple[GroupSequentialDesign, dict[str, An
         binding_futility=inp.binding_futility,
     )
     return gsd, report.sequential_summary(_fixed(inp, 2 * inp.alpha_one_sided), gsd)
+
+
+def _gs_equivalence(cfg: config.Config, flags: dict[str, Any], inp: _DesignInputs) -> dict:
+    """Two one-sided group-sequential tests, each spending alpha_one_sided."""
+    seq = config.merge(cfg, "sequential", flags)
+    for key in ("futility", "binding_futility", "analyse"):
+        if seq.get(key) is not None and seq.get(key) != "none":
+            raise ValueError(
+                f"--{key.replace('_', '-')} is not available for group-sequential equivalence"
+            )
+    eff = inp.effect
+    if inp.endpoint == "survival":
+        raise ValueError("equivalence (--margin) is for normal and binary endpoints")
+    if "delta0" in eff:
+        raise ValueError("give --margin for equivalence or --delta0 for non-inferiority, not both")
+    if inp.method != "z":
+        raise ValueError('equivalence uses the normal approximation; leave method as "z"')
+    assert inp.looks is not None
+    if inp.endpoint == "normal":
+        effect = {"delta": eff["delta"], "sd": eff["sd"]}
+    else:
+        effect = {"pc": eff["pc"], "pt": eff["pt"]}
+    return report.gs_equivalence_summary(
+        inp.endpoint,
+        eff["margin"],
+        inp.looks,
+        **effect,
+        alpha_one_sided=inp.alpha_one_sided,
+        power=inp.power,
+        allocation=inp.allocation,
+        spending=inp.efficacy,
+    )
+
+
+def _print_gs_equivalence(s: dict[str, Any]) -> None:
+    size = s["sample_size"]
+    lo, hi = s["margin"]
+    _print_pairs(
+        {
+            "endpoint": s["endpoint"],
+            "effect": report.effect_text(s),
+            "hypothesis": report.hypothesis_text(s),
+            "allocation": s["allocation"],
+            "alpha (each one-sided test)": s["alpha_each_test"],
+            "power": s["power"],
+            "spending (each test)": s["spending"],
+            "fixed TOST n_control": size["fixed_n_control"],
+            "inflation_factor": size["inflation_factor"],
+            "max_n_control": size["max_n_control_ceil"],
+            "max_n_treatment": size["max_n_treatment_ceil"],
+            "max_n_total": size["max_n_total_ceil"],
+            "expected n_control (design)": size["expected_n_control"],
+            "P(equivalence) at design": s["prob_equivalence"],
+            f"P(equivalence) at {lo:g} / {hi:g}": (
+                f"{s['prob_equivalence_at_lower_margin']:.4f} / "
+                f"{s['prob_equivalence_at_upper_margin']:.4f}"
+            ),
+        }
+    )
+    typer.echo(
+        "\nLooks (equivalence when the repeated CI, estimate +/- RCI half-width, lies inside "
+        "the margins)"
+    )
+    typer.echo(report.gs_equivalence_table(s))
 
 
 def _analysis(inp: _DesignInputs, gsd: GroupSequentialDesign, z: list[float]) -> dict[str, Any]:
@@ -743,6 +847,21 @@ def _resolve_adaptation(
     a = {k: v for k, v in config.merge(cfg, "adaptation", flags).items() if v is not None}
     if not a and not required:
         return None
+    blinded = a.get("blinded", False)
+    if not isinstance(blinded, bool):
+        raise ValueError("blinded must be true or false")
+    blind_keys = [k for k in _BLINDED_KEYS if k in a]
+    if blinded:
+        other = [k for k in _UNBLINDED_KEYS if k in a]
+        if other:
+            names = ", ".join("--" + k.replace("_", "-") for k in other)
+            raise ValueError(
+                f"{names} applies to unblinded re-estimation; leave it out with --blinded"
+            )
+        return _blinded_settings(a)
+    if blind_keys:
+        names = ", ".join("--" + k.replace("_", "-") for k in blind_keys)
+        raise ValueError(f"{names} needs --blinded")
     extend = a.get("extend", "followup")
     if extend not in ("followup", "accrual"):
         raise ValueError(f'extend must be "followup" or "accrual", got {extend!r}')
@@ -759,6 +878,96 @@ def _resolve_adaptation(
     }
 
 
+_BLINDED_KEYS = ("pilot_n", "pilot_sd", "sd_adjusted", "floor")
+_UNBLINDED_KEYS = ("interim_fraction", "cp_min", "cp_target", "z1", "extend")
+
+
+def _blinded_settings(a: dict[str, Any]) -> dict[str, Any]:
+    if a.get("pilot_n") is None:
+        raise ValueError("blinded re-estimation needs --pilot-n (or pilot_n in [adaptation])")
+    adjusted = a.get("sd_adjusted", False)
+    if not isinstance(adjusted, bool):
+        raise ValueError("sd_adjusted must be true or false")
+    floor = str(a.get("floor", "planned"))
+    if floor not in ("planned", "pilot"):
+        raise ValueError(f'floor must be "planned" or "pilot", got {floor!r}')
+    return {
+        "blinded": True,
+        "pilot_n": _whole(a["pilot_n"], "pilot_n"),
+        "pilot_sd": None if a.get("pilot_sd") is None else _number(a["pilot_sd"], "pilot_sd"),
+        "sd_adjusted": adjusted,
+        "floor": floor,
+        "max_factor": 2.0
+        if a.get("max_factor") is None
+        else _number(a["max_factor"], "max_factor"),
+    }
+
+
+_BLINDED_NSIM = 100_000
+
+
+def _blinded_run(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any], nsim, seed):
+    """Blinded SD re-estimation for a fixed normal design; OCs are simulated."""
+    seq = config.merge(cfg, "sequential", flags)
+    if any(seq.get(k) is not None for k in ("looks", "efficacy", "futility")):
+        raise ValueError("blinded re-estimation is for a fixed design; leave out --looks")
+    inp = _resolve_design(cfg, flags)
+    if inp.endpoint != "normal":
+        raise ValueError("blinded re-estimation of the SD is for the normal endpoint")
+    if any(k in inp.effect for k in ("margin", "delta0")):
+        raise ValueError(
+            "blinded re-estimation is for superiority; leave out --margin and --delta0"
+        )
+    if inp.method != "z":
+        raise ValueError(
+            'blinded re-estimation uses the normal-approximation formula; leave method as "z"'
+        )
+    design = BlindedSSR(
+        delta=inp.effect["delta"],
+        sd=inp.effect["sd"],
+        pilot_n=adapt["pilot_n"],
+        alpha_one_sided=inp.alpha_one_sided,
+        power=inp.power,
+        allocation=inp.allocation,
+        max_factor=adapt["max_factor"],
+        adjusted=adapt["sd_adjusted"],
+        floor=adapt["floor"],
+    )
+    n_sim = _BLINDED_NSIM if nsim is None else nsim
+    seed = _seed(None) if seed is None else seed
+    return design, report.blinded_summary(design, n_sim, seed, adapt["pilot_sd"])
+
+
+def _print_blinded(s: dict[str, Any]) -> None:
+    _print_pairs(
+        {
+            "endpoint": "normal",
+            "effect": f"delta = {s['delta']:g}, sd = {s['sd']:g} (planning)",
+            "alpha_one_sided": s["alpha_one_sided"],
+            "power (target)": s["power"],
+            "allocation": s["allocation"],
+            "pilot (C, T)": f"{s['pilot_control']}, {s['pilot_treatment']}",
+            "variance estimate": "one-sample, bias-adjusted"
+            if s["sd_adjusted"]
+            else "one-sample (lumped)",
+            "planned n_control": s["planned_n_control"],
+            "planned n_total": s["planned_n_total"],
+            "n_control bounds": f"{s['n_control_floor']} to {s['n_control_cap']} "
+            f"(floor {s['floor']}, cap {s['max_factor']:g} x planned)",
+            "final test": "one-sided two-sample t-test on all patients",
+        }
+    )
+    typer.echo(f"\nOperating characteristics (simulated, {s['n_sim']} trials each)")
+    typer.echo(report.blinded_table(s))
+    if "interim" in s:
+        i = s["interim"]
+        typer.echo(
+            f"\nPilot SD {i['pilot_sd']:g}: variance used {i['variance_used']:.4f}; "
+            f"n_control {i['n_control']}, n_treatment {i['n_treatment']}, total {i['n_total']}"
+            + (" (at the cap)" if i["at_cap"] else " (at the floor)" if i["at_floor"] else "")
+        )
+
+
 def _ssr_flags(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any]) -> dict:
     """Flags with looks set to [interim_fraction, 1]; any other looks given is an error."""
     looks = config.merge(cfg, "sequential", flags).get("looks")
@@ -773,6 +982,8 @@ def _ssr_flags(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any])
 
 def _ssr_run(cfg: config.Config, flags: dict[str, Any], adapt: dict[str, Any], nsim, seed):
     """The planned two-look design, the adaptive design and its summary."""
+    if adapt.get("blinded"):
+        raise ValueError("the report does not cover blinded re-estimation; use trialdesign ssr")
     inp = _resolve_design(cfg, _ssr_flags(cfg, flags, adapt))
     survival = inp.endpoint == "survival"
     if adapt["extend_given"] and not survival:
@@ -1029,7 +1240,8 @@ def design(
     """Sample size and boundaries: a fixed design, or group-sequential with --looks.
 
     A fixed design reports a two-sided alpha (default 0.05); --margin makes it an
-    equivalence design (two one-sided tests). A group-sequential design uses the one-sided
+    equivalence design (two one-sided tests), group-sequential with --looks (each one-sided
+    test spends --alpha-one-sided). A group-sequential design uses the one-sided
     alpha (default 0.025) and inflates the fixed design with the same critical value;
     --analyse adds inference from the observed z-statistics.
     """
@@ -1042,6 +1254,8 @@ def design(
             if observed is not None:
                 raise ValueError("--analyse needs a group-sequential design: give --looks")
             out = _fixed(inp, 2 * inp.alpha_one_sided)
+        elif "margin" in inp.effect:
+            out = _gs_equivalence(cfg, flags, inp)
         else:
             gsd, out = _sequential(inp)
             if observed is not None:
@@ -1050,6 +1264,13 @@ def design(
         raise _fail(exc) from exc
     if as_json:
         _print_json(out)
+        return
+    if out["design"] == "group_sequential_equivalence":
+        typer.echo(
+            f"trialdesign {__version__} | group-sequential equivalence | "
+            "alpha is per one-sided test"
+        )
+        _print_gs_equivalence(out)
         return
     if out["design"] == "fixed":
         typer.echo(f"trialdesign {__version__} | fixed design | alpha is two-sided")
@@ -1227,11 +1448,16 @@ def ssr_cmd(
     max_factor: MaxFactorOpt = None,
     extend: ExtendOpt = None,
     z1: Z1Opt = None,
+    blinded: BlindedOpt = None,
+    pilot_n: PilotNOpt = None,
+    pilot_sd: PilotSdOpt = None,
+    sd_adjusted: SdAdjustedOpt = None,
+    floor: FloorOpt = None,
     nsim: NsimOpt = None,
     seed: SeedOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
-    """Promising-zone sample size re-estimation at one interim (survival: events).
+    """Sample size re-estimation: promising zone at one interim, or blinded (--blinded).
 
     Plans a two-look group-sequential design (looks at --interim-fraction and 1), then, in
     the promising zone of conditional power at the observed trend, raises the second-stage
@@ -1242,6 +1468,13 @@ def ssr_cmd(
     how the extra events are found. Prints the zones and exact operating characteristics;
     --z1 applies the rule to an observed interim result, and --nsim adds simulated checks
     (for survival, patient-level).
+
+    With --blinded (normal endpoint, fixed design) the SD is re-estimated from the one-sample
+    variance of an internal pilot of --pilot-n patients without unblinding (Kieser and Friede
+    2003), the sample size recomputed between the planned size and --max-factor times it,
+    and the final t-test applied to all patients. Type I error, power and the sample size
+    distribution are simulated for true SDs 0.75 to 1.5 times the planning SD (100,000 trials
+    unless --nsim); --pilot-sd applies the rule to an observed pilot.
     """
     flags = {k: v for k, v in locals().items() if k not in ("config_file", "as_json")}
     try:
@@ -1249,11 +1482,22 @@ def ssr_cmd(
         adapt = _resolve_adaptation(cfg, flags, required=True)
         assert adapt is not None
         n_sim, seed_used = _simulation_settings(cfg, flags, None)
-        _, s = _ssr_run(cfg, flags, adapt, n_sim, seed_used)
+        if adapt.get("blinded"):
+            _, s = _blinded_run(cfg, flags, adapt, n_sim, seed_used)
+            seed_used = s["seed"]
+        else:
+            _, s = _ssr_run(cfg, flags, adapt, n_sim, seed_used)
     except ValueError as exc:
         raise _fail(exc) from exc
     if as_json:
         _print_json(s)
+        return
+    if s.get("design") == "blinded_ssr":
+        typer.echo(
+            f"trialdesign {__version__} | seed {seed_used} | blinded sample size "
+            "re-estimation | alpha is one-sided"
+        )
+        _print_blinded(s)
         return
     seed_text = f" | seed {seed_used}" if seed_used is not None else ""
     what = "event" if s.get("unit") == "events" else "sample size"

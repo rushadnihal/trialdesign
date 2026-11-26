@@ -139,9 +139,19 @@ class _Recursion:
 
     def advance(self, lower: float, upper: float) -> None:
         """Move to the next look, keeping only paths that continue in ``(lower, upper)``."""
+        self.advance_regions([(lower, upper)])
+
+    def advance_regions(self, regions: Sequence[tuple[float, float]]) -> None:
+        """Move to the next look, keeping paths that continue in a union of disjoint intervals.
+
+        Each interval gets its own grid; Simpson weights are per interval, so the grids are
+        simply joined.
+        """
         k = self.k
         mean = self.drift * math.sqrt(self.t[k])
-        z_new, w_new = _grid(mean, lower, upper, self.r)
+        grids = [_grid(mean, lo, hi, self.r) for lo, hi in regions]
+        z_new = np.concatenate([g[0] for g in grids])
+        w_new = np.concatenate([g[1] for g in grids])
         if k == 0:
             h = stats.norm.pdf(z_new - mean)
         else:
