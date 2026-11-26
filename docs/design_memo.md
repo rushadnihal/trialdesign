@@ -1,8 +1,8 @@
 # Design memo: TD-101 phase 2, Bayesian go/no-go interim
 
 *Fictional trial, written to show how `trialdesign` supports a design decision. Sections 1 to 5
-were written with `trialdesign` 0.1.0 and the addendum with 0.2.0; version 0.2.0 reproduces
-every number, using the commands in the appendix.*
+were written with `trialdesign` 0.1.0 and the addenda with 0.2.0 to 0.4.0; version 0.4.0
+reproduces every number, using the commands in the appendix.*
 
 **To:** TD-101 clinical team · **From:** Trial statistics · **Decision needed:** sample size and
 interim rule for the phase 2 study
@@ -153,9 +153,59 @@ With O'Brien-Fleming-type boundaries these are close to the naive values (12.0 p
 repeated confidence interval at that look would have been the one to quote, and it is wide (for
 z = 3.1: 1.0 to 44.7 points).
 
+## Addendum (v0.4): the phase 3 survival design under a delayed effect
+
+**The question.** If TD-101 goes to phase 3, the survival comparison is sized for a hazard
+ratio of 0.70 with proportional hazards
+([`examples/phase3_survival_accrual.toml`](../examples/phase3_survival_accrual.toml)). That
+design has a 12-month control median, 498 patients recruited over about 23.5 months with a
+6-month ramp-up, and 307 events. It has three looks at 33%, 67% and 100% of the events, with
+O'Brien-Fleming-type efficacy and non-binding Pocock-type futility. Immunotherapies often
+help only after a lag. What happens if the treatment does nothing for the first 4 months
+after entry and only then works with a hazard ratio of 0.70?
+
+**What the delay does.** The table compares 10,000 simulated trials with proportional
+hazards against 10,000 with the 4-month delay. Both use the same seed and the log-rank test,
+and both follow the futility boundary.
+
+| | Proportional hazards | 4-month delay |
+| --- | --- | --- |
+| Power | 0.793 | 0.364 |
+| First look (101 events): month | 17.9 | 17.3 |
+| First look: stop for futility | 0.091 | 0.403 |
+| Second look: stop for futility | 0.069 | 0.173 |
+| Expected duration (months) | 27.9 | 24.7 |
+
+Power falls from 0.79 to 0.36. Most of the loss happens at the first look. At month 17 most
+events so far fall in the first months after entry, when the two arms do not differ, so the
+interim z is near zero. The Pocock futility boundary (z below 0.45) then stops 40% of trials
+that would have shown a real benefit, against 9% under proportional hazards. The looks
+themselves barely move: the events still arrive at about the planned months.
+
+**What helps, and what it costs.** These figures come from 10,000 simulated trials each,
+with the same 4-month delay followed by a hazard ratio of 0.70.
+
+- *Drop futility* and keep the size: power is only 0.45, because the trial is too small for
+  the diluted effect.
+- *Use the Fleming-Harrington FH(0,1) test*, which weights late differences more. In
+  `trialdesign` this is only available with a single analysis. With one look at the planned
+  events it lifts power from 0.46 (log-rank) to 0.56. Its type I error was 0.027 (SE 0.0007) in 50,000 simulated trials, so
+  check it again for the final design.
+- *Size for the diluted effect.* Design for a hazard ratio of 0.78 while the truth is the
+  delay, with no futility: 516 events, 747 patients and 45.5 months give a power of 0.80.
+  Keeping the Pocock futility needs a design hazard ratio of 0.80: 785 events and 1,057
+  patients for the same power.
+
+**Recommendation.** If the mechanism makes a delay plausible, do not put a futility look at a
+third of the events. Either size for the average effect (about 750 patients, no early
+futility) or move the first look later and make it efficacy-only. Agree the delay assumption
+with the clinical team before the sample size is fixed. `trialdesign report --delay 4` adds
+this comparison, with survival curves per arm, to the design report.
+
 ## Appendix: reproduce every number
 
 ```bash
+pip install gsdtrial==0.4.0
 # Design A (package default, calibrated to one-sided 0.025)
 trialdesign bayes --pc 0.30 --pt 0.45 --n 60 --interim 30 --design-prior-t 4.5,5.5
 # Design B and C (calibrated to one-sided 0.10)
@@ -179,12 +229,26 @@ trialdesign simulate --endpoint binary --pc 0.30 --pt 0.45 --looks 0.5,1 --futil
     --engine patient --nsim 100000 --seed 2026 --alpha-one-sided 0.0235
 trialdesign design --endpoint binary --pc 0.30 --pt 0.45 --looks 0.5,1 --futility obf \
     --analyse 1.4,2.3
+# Addendum v0.4: the phase 3 survival design with a 4-month delayed effect
+trialdesign report --config examples/phase3_survival_accrual.toml --delay 4 --nsim 200000 \
+    --seed 2026 --out results/delay
+trialdesign simulate --config examples/phase3_survival_accrual.toml --engine patient \
+    --delay 4 --nsim 10000 --seed 2026 --futility none
+trialdesign simulate --config examples/phase3_survival_accrual.toml --engine patient \
+    --delay 4 --looks 1 --nsim 10000 --seed 2026
+trialdesign simulate --config examples/phase3_survival_accrual.toml --engine patient \
+    --delay 4 --looks 1 --test fh:0,1 --nsim 50000 --seed 7
+trialdesign simulate --config examples/phase3_survival_accrual.toml --engine patient \
+    --delay 4 --hr-after 0.7 --hr 0.78 --futility none --nsim 10000 --seed 2026
+trialdesign simulate --config examples/phase3_survival_accrual.toml --engine patient \
+    --delay 4 --hr-after 0.7 --hr 0.80 --nsim 10000 --seed 2026
 ```
 
 **References.** Berry, Carlin, Lee and Müller (2010), *Bayesian Adaptive Methods for Clinical
 Trials*. Cui, Hung and Wang (1999), *Biometrics* 55, 853–857. Lee and Liu (2008), *Clinical
 Trials* 5, 93–106. Mehta and Pocock (2011), *Statistics in Medicine* 30, 3267–3284. O'Hagan,
 Stevens and Campbell (2005), *Pharmaceutical Statistics* 4, 187–201. Jennison and Turnbull
-(1989), *JRSS B* 51, 305–361. Tsiatis, Rosner and Mehta (1984), *Biometrics* 40, 797–803.
+(1989), *JRSS B* 51, 305–361. Fleming and Harrington (1991), *Counting Processes and Survival
+Analysis*. Tsiatis, Rosner and Mehta (1984), *Biometrics* 40, 797–803.
 Spiegelhalter, Abrams and Myles (2004), *Bayesian Approaches to Clinical Trials and Health-Care
 Evaluation*.

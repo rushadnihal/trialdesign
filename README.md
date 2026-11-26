@@ -51,7 +51,7 @@ trialdesign design --endpoint survival --hr 0.7 --prob-event 0.75 \
 ```
 
 ```text
-trialdesign 0.3.0 | group-sequential design (output abridged) | alpha is one-sided
+trialdesign 0.4.0 | group-sequential design (output abridged) | alpha is one-sided
   fixed events (alpha_two_sided 0.05)  246.7871
   inflation_factor                     1.2437
   max_events                           307
@@ -336,7 +336,7 @@ patient-level check is the better guide.
 | `trialdesign bayes` | Bayesian go/no-go interim: exact OCs, posterior, PPoS and decision for observed data, assurance |
 | `trialdesign ssr` | Promising-zone sample size (survival: event) re-estimation: zones, exact OCs, the rule applied to an interim z; `--blinded` re-estimates the SD from an internal pilot |
 | `trialdesign graph` | Graphical multiple test: rejections, adjusted p-values and the path for observed p-values (`--p`), and power for given z-means and correlation (`--means`) |
-| `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics; `--engine patient` adds a patient-level check, `--analyse` an inference section |
+| `trialdesign report` | `report.md` plus PNG plots of the boundaries and operating characteristics; `--engine patient` adds a patient-level check, `--analyse` an inference section, `--delay` (or another event model) a non-proportional hazards section, and a `[graph]` table a multiple-testing section |
 
 Each command takes flags, a TOML design file (`--config`), or both; flags override the file.
 Output is a plain table, or JSON with `--json`. Only `report --out` writes to disk, and every
@@ -419,6 +419,19 @@ not hold alpha. A `[hazards]` table in a design file takes the same settings
 (`delay`, `waning`, `hr_after`, `hazard_times`, `hazards_control`, `hazards_treatment`,
 `kappa`), and `test` goes under `[simulation]`.
 
+`trialdesign report` takes the same flags (or `[hazards]` table) and adds a section that puts
+the design under proportional hazards next to the scenario: power, the month and stopping
+probabilities of each look, expected duration, patients and events (10,000 patient-level
+trials each, same seed), with the survival curves per arm in `survival.png`:
+
+```bash
+trialdesign report --config examples/phase3_survival_accrual.toml --delay 4 --nsim 100000 --out results/
+```
+
+For that design (three looks, Pocock futility) the delay cuts power from 0.79 to 0.36, mostly
+because the first futility look stops 40% of trials instead of 9%; see the
+[design memo](https://github.com/rushadnihal/trialdesign/blob/main/docs/design_memo.md) addendum.
+
 ### Graphical multiple testing
 
 A confirmatory trial with two doses, each with a primary and a key secondary endpoint, tests
@@ -452,7 +465,9 @@ and 0.366 for H1 to H4, 0.814 to reject at least one and 0.293 to reject all fou
 the usual procedures: `--preset holm:3`, `bonferroni:3`, `fixed-sequence:3`,
 `fallback:0.5,0.3,0.2` and `two-doses`. The graph is a Bonferroni-based shortcut of a closed
 test, so it controls the family-wise error rate for any correlation; it is for fixed designs
-(one analysis).
+(one analysis). A `[graph]` table in a file given to `trialdesign report` adds a multiple-testing
+section, with the graph drawn (weights, transitions and the power of each hypothesis) in
+`graph.png`.
 
 ## Python API
 
