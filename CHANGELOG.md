@@ -26,6 +26,14 @@ All notable changes to this project. Versions follow [Semantic Versioning](https
   event model and the test.
 - `examples/phase3_survival_nph.toml`: a design sized for HR 0.70 and simulated with a
   4-month delayed effect.
+- **Graphical multiple testing** (`trialdesign.multiplicity`, Bretz et al. 2009): `Graph`
+  (weights and transition matrix, with Bonferroni, Holm, fixed-sequence, fallback and
+  two-dose presets), `graph_test` (rejections, adjusted p-values and the path through the
+  graph) and `graph_power` (simulated power per hypothesis, of at least one and of all, from
+  correlated z-statistics). Validated against a closed-test implementation in R,
+  `stats::p.adjust`, and exact power from `mvtnorm::pmvnorm`.
+- `trialdesign graph` command and a `[graph]` table in design files;
+  `examples/two_doses_graph.toml`.
 
 ## 0.3.0 (2026-11-26)
 
